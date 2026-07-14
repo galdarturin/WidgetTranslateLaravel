@@ -35,7 +35,7 @@ class InstallCommand extends Command
         $this->line('4. Render the switcher from the layout:');
         $this->line('   @newtxtWidget()');
         $this->line('');
-        $this->line('5. Prewarm rendered pages and sync local translation artifacts:');
+        $this->line('5. Optional local cache tools. NewTXT still owns crawling and translation work:');
         $this->line('   php artisan newtxt:prewarm --language=fr --path=/');
         $this->line('   php artisan newtxt:translations-sync --language=fr --path=/');
         $this->line('');

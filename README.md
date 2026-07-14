@@ -4,20 +4,42 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 
 ## Responsibilities
 
+- Treat the Laravel application as an unprepared host that should not build a
+  separate translation subsystem.
 - Render the language switcher from Laravel with `@newtxtWidget()`.
 - Call the NewTXT API from the server with dashboard-issued API, public, and private keys.
 - Read languages, URL mode, rendering mode, and rendered-page cache policy from the NewTXT account.
 - Serve translated public HTML through `newtxt.render` middleware.
-- Store translated HTML in the configured Laravel cache store.
-- Store source-text hash translations under the project storage directory.
-- Store rendered page hashes and optional HTML snapshots for deterministic invalidation.
+- Store API-rendered translated HTML in the configured Laravel cache store.
+- Store API-provided source-text hash translations under the project storage directory.
+- Store rendered page hashes and optional HTML snapshots for deterministic local invalidation.
 - Inject canonical, robots, Open Graph, and Twitter URL metadata into rendered translated HTML.
-- Prewarm translated pages with Artisan commands.
-- Read public sitemap URLs only to resolve paths for local prewarm.
-- Build translated sitemap entries from application-provided source sitemap entries.
-- Include local rendered page snapshots in translated sitemap output.
-- Keep crawling, AI translation, and translation orchestration inside the NewTXT service.
+- Offer optional Artisan tools for local cache hydration and translation artifact sync.
+- Read public sitemap URLs only when they already exist and are useful for local prewarm.
+- Build translated sitemap entries from application-provided source sitemap entries without requiring a custom sitemap implementation.
+- Include local rendered page snapshots in translated sitemap output when available.
+- Keep crawling, discovery tools, AI translation, and translation orchestration inside the NewTXT service.
 - Keep private routes, account pages, checkout pages, APIs, and webhooks out of translation middleware.
+
+## Integration Model
+
+NewTXT treats the Laravel application as an unprepared host. The host should not
+need to build language routing, translation queues, crawler jobs, SEO translation
+pipelines, or editor tooling only to become translatable.
+
+This package is the Laravel edge for NewTXT:
+
+- It renders the widget, signs server-side requests, protects private routes,
+  serves translated public HTML, and keeps local cache/artifact adapters small.
+- It sends heavy work to the NewTXT API, including rendered page generation,
+  page translation lookup, account settings, and cache orchestration.
+- It uses local source paths, public HTML responses, existing sitemap entries,
+  and optional signed callbacks only as integration inputs for NewTXT-owned
+  tools.
+
+If a customer site has no sitemap, no translation tables, and no custom
+multilingual code, that is a valid installation target. Do not add those systems
+to the customer app just for this package.
 
 ## Install
 
@@ -101,11 +123,16 @@ php artisan newtxt:prewarm --language=fr --path=/
 php artisan newtxt:prewarm --language=fr --sitemap=https://example.com/sitemap.xml
 ```
 
+Prewarm is optional local cache hydration. It is not a crawler and it is not a
+translation engine. Use it when the application already has known public paths,
+an existing public sitemap, or a deploy workflow that benefits from warmed local
+HTML cache entries.
+
 When `sync_hashed_translations_on_prewarm` is enabled in the published package config, prewarm also syncs translated nodes into the local hashed translation store. If no `--language` option is passed, the command uses target languages from the NewTXT account.
 
 Rendered HTML is stored in the Laravel cache store and as a project-local HTML snapshot. If the Laravel cache entry is missing later, the middleware rehydrates it from `storage/app/newtxt` before making a remote render request.
 
-Sitemap prewarm accepts only public `http` and `https` URLs and blocks localhost, private IP, and reserved IP targets. The package does not crawl websites or generate translations by itself; it uses sitemap URLs only to collect source paths and then calls the NewTXT API for rendered pages and translated nodes.
+Sitemap prewarm accepts only public `http` and `https` URLs and blocks localhost, private IP, and reserved IP targets. The package does not crawl websites or generate translations by itself; it uses sitemap URLs only to collect source paths and then calls the NewTXT API for rendered pages and translated nodes. If the host does not already expose a sitemap, use request-time rendering, NewTXT dashboard discovery, or signed service callbacks instead of building a custom sitemap solely for this integration.
 
 ## Hashed Translation Store
 
@@ -127,6 +154,11 @@ use Newtxt\Laravel\Facades\Newtxt;
 $entry = Newtxt::hashedTranslation('fr', 'Source text');
 Newtxt::putHashedTranslation('fr', 'Source text', 'Translated text', ['source' => 'manual']);
 ```
+
+Manual writes are intended for controlled migrations, tests, or support tooling.
+Normal customer installations should populate this store from NewTXT API
+responses through `newtxt:prewarm`, `newtxt:translations-sync`, middleware
+rendering, or signed service callbacks.
 
 ## Rendered Page Snapshots
 
