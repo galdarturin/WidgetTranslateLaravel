@@ -37,6 +37,10 @@ Public release options:
 - Tag stable releases in the source repository, for example `v1.0.0`, so Composer can resolve installable versions.
 - Make sure the Packagist account can publish packages under the protected `newtxt` vendor name.
 
+Do not add a manual `version` field to `composer.json` for normal VCS releases. Composer reads installable versions from Git branches and tags.
+
+Changes pushed to `main` update the `dev-main` package reference after Packagist refreshes its metadata, but customer applications only receive those changes after running `composer update newtxt/newtxt-translate` and deploying the updated lock file. Stable customer installs require a semantic version tag such as `v1.0.1`, `v1.1.0`, or `v2.0.0`.
+
 Private or early-access release options:
 
 - Use Private Packagist or another authenticated Composer repository.
