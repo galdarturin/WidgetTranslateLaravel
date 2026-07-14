@@ -23,8 +23,9 @@ class HashedTranslationStore
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $sourceHash = $this->hasher->textHash($sourceText);
         $translationHash = $this->hasher->textHash($translatedText);
+        $siteId = (string) ($metadata['siteId'] ?? $this->config->get('newtxt.site_id', ''));
         $entry = [
-            'siteId' => (string) $this->config->get('newtxt.site_id', ''),
+            'siteId' => $siteId,
             'languageCode' => $languageCode,
             'sourceHash' => $sourceHash,
             'translationHash' => $translationHash,
@@ -34,7 +35,7 @@ class HashedTranslationStore
             'updatedAt' => gmdate('c'),
         ];
 
-        $this->writeJson($this->entryPath($languageCode, $sourceHash), $entry);
+        $this->writeJson($this->entryPath($languageCode, $sourceHash, $siteId), $entry);
 
         return $entry;
     }
@@ -74,9 +75,14 @@ class HashedTranslationStore
     /**
      * Resolve a translated fragment by source text.
      */
-    public function get(string $languageCode, string $sourceText): ?array
+    public function get(string $languageCode, string $sourceText, ?string $siteId = null): ?array
     {
-        $path = $this->entryPath($this->normalizeLanguageCode($languageCode), $this->hasher->textHash($sourceText));
+        $path = $this->entryPath(
+            $this->normalizeLanguageCode($languageCode),
+            $this->hasher->textHash($sourceText),
+            (string) ($siteId ?? $this->config->get('newtxt.site_id', '')),
+        );
+
         if (!$this->files->exists($path)) {
             return null;
         }
@@ -89,9 +95,9 @@ class HashedTranslationStore
     /**
      * Build the full local path for a translation entry.
      */
-    private function entryPath(string $languageCode, string $sourceHash): string
+    private function entryPath(string $languageCode, string $sourceHash, string $siteId): string
     {
-        return $this->basePath() . "/translations/{$this->siteId()}/{$languageCode}/{$sourceHash}.json";
+        return $this->basePath() . "/translations/{$this->siteId($siteId)}/{$languageCode}/{$sourceHash}.json";
     }
 
     /**
@@ -116,9 +122,9 @@ class HashedTranslationStore
     /**
      * Normalize the site ID for filesystem paths.
      */
-    private function siteId(): string
+    private function siteId(string $siteId): string
     {
-        return preg_replace('/[^A-Za-z0-9_-]/', '_', (string) $this->config->get('newtxt.site_id', 'site')) ?: 'site';
+        return preg_replace('/[^A-Za-z0-9_-]/', '_', $siteId !== '' ? $siteId : 'site') ?: 'site';
     }
 
     /**

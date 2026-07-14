@@ -19,11 +19,11 @@ class SyncTranslationsCommand extends Command
      */
     public function handle(NewtxtManager $newtxt): int
     {
-        $languages = $this->resolveLanguages();
+        $languages = $this->resolveLanguages($newtxt);
         $paths = $this->resolvePaths();
 
         if (!$languages) {
-            $this->error('No languages were provided. Use --language or configure NEWTXT_TARGET_LANGUAGES.');
+            $this->error('No languages were provided. Use --language or configure target languages in the NewTXT dashboard.');
             return self::FAILURE;
         }
 
@@ -53,9 +53,9 @@ class SyncTranslationsCommand extends Command
     /**
      * Resolve language options into normalized language codes.
      */
-    private function resolveLanguages(): array
+    private function resolveLanguages(NewtxtManager $newtxt): array
     {
-        $languages = $this->option('language') ?: config('newtxt.target_languages', []);
+        $languages = $this->option('language') ?: $newtxt->targetLanguages();
 
         return collect($languages)
             ->map(fn ($language) => strtolower(trim((string) $language)))

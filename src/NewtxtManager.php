@@ -11,6 +11,7 @@ use Newtxt\Laravel\Html\PageHasher;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Storage\HashedTranslationStore;
 use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
+use Throwable;
 
 class NewtxtManager
 {
@@ -37,7 +38,7 @@ class NewtxtManager
             return '';
         }
 
-        $siteKey = (string) $this->config->get('newtxt.widget_key', $this->config->get('newtxt.site_key', ''));
+        $siteKey = (string) $this->config->get('newtxt.public_key', '');
         $loaderUrl = (string) $this->config->get('newtxt.widget_loader_url', '');
         if ($siteKey === '' || $loaderUrl === '') {
             return '';
@@ -46,7 +47,7 @@ class NewtxtManager
         $attributes = array_merge([
             'src' => $loaderUrl,
             'data-site-key' => $siteKey,
-            'data-navigation-mode' => (string) $this->config->get('newtxt.navigation_mode', 'redirect'),
+            'data-navigation-mode' => $this->navigationMode(),
         ], $attributes);
 
         return '<script ' . $this->htmlAttributes($attributes) . '></script>';
@@ -64,17 +65,19 @@ class NewtxtManager
             return null;
         }
 
-        $siteId = (string) $this->config->get('newtxt.site_id', '');
-        if ($siteId === '') {
+        if ($this->publicKey() === '') {
             return null;
         }
 
-        $rendered = $this->client->renderPage(
-            $siteId,
-            $this->normalizeLanguageCode($languageCode),
-            $this->normalizePath($path),
-            $options,
-        );
+        try {
+            $rendered = $this->client->renderPage(
+                $this->normalizeLanguageCode($languageCode),
+                $this->normalizePath($path),
+                array_merge(['urlMode' => $this->urlMode()], $options),
+            );
+        } catch (Throwable) {
+            return null;
+        }
 
         return $this->prepareRenderedPage($rendered, $languageCode, $path, $options);
     }
@@ -96,7 +99,7 @@ class NewtxtManager
         $cacheKey = $this->cacheKey($languageCode, $path, $options);
         $ttl = max(0, (int) $this->config->get('newtxt.cache_ttl', 86400));
 
-        if ($ttl === 0 || (bool) ($options['forceRefreshCache'] ?? false)) {
+        if (!$this->cacheTranslatedPages() || $ttl === 0 || (bool) ($options['forceRefreshCache'] ?? false)) {
             return $this->renderPage($languageCode, $path, $options);
         }
 
@@ -134,14 +137,10 @@ class NewtxtManager
             return 0;
         }
 
-        $siteId = $this->siteId();
-        if ($siteId === '') {
-            return 0;
-        }
-
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $path = $this->normalizePath($path);
-        $payload = $this->client->pageTranslations($siteId, $languageCode, $path, array_merge([
+        $payload = $this->client->pageTranslations($languageCode, $path, array_merge([
+            'urlMode' => $this->urlMode(),
             'includeHtml' => false,
             'autoTranslateIfMissing' => false,
         ], $options));
@@ -149,8 +148,9 @@ class NewtxtManager
         $nodes = is_array($payload['nodes'] ?? null) ? $payload['nodes'] : [];
 
         return $this->translations->putNodes($languageCode, $nodes, [
+            'siteId' => $this->siteId(),
             'path' => (string) ($payload['path'] ?? $path),
-            'urlMode' => (string) ($payload['urlMode'] ?? ($options['urlMode'] ?? $this->config->get('newtxt.url_mode', 'path'))),
+            'urlMode' => (string) ($payload['urlMode'] ?? ($options['urlMode'] ?? $this->urlMode())),
             'translatedUrl' => $payload['translatedUrl'] ?? null,
             'linkTags' => $payload['linkTags'] ?? [],
             'syncedAt' => gmdate('c'),
@@ -162,6 +162,11 @@ class NewtxtManager
      */
     public function putHashedTranslation(string $languageCode, string $sourceText, string $translatedText, array $metadata = []): array
     {
+        $siteId = $this->siteId();
+        if ($siteId !== '' && !array_key_exists('siteId', $metadata)) {
+            $metadata['siteId'] = $siteId;
+        }
+
         return $this->translations->put($languageCode, $sourceText, $translatedText, $metadata);
     }
 
@@ -170,7 +175,7 @@ class NewtxtManager
      */
     public function hashedTranslation(string $languageCode, string $sourceText): ?array
     {
-        return $this->translations->get($languageCode, $sourceText);
+        return $this->translations->get($languageCode, $sourceText, $this->siteId());
     }
 
     /**
@@ -190,9 +195,9 @@ class NewtxtManager
             return null;
         }
 
-        $sourceLanguage = $this->normalizeLanguageCode((string) $this->config->get('newtxt.source_language', 'en'));
+        $sourceLanguage = $this->sourceLanguage();
         $path = $this->normalizePath($path);
-        $urlMode = (string) ($options['urlMode'] ?? $this->config->get('newtxt.url_mode', 'path'));
+        $urlMode = (string) ($options['urlMode'] ?? $this->urlMode());
         $version = (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v1');
         $snapshot = [
             'siteId' => $siteId,
@@ -223,6 +228,44 @@ class NewtxtManager
     }
 
     /**
+     * Return true when account settings allow server-side translated pages.
+     */
+    public function canServeTranslatedPages(): bool
+    {
+        return $this->enabled() && $this->translationMode() === 'seo';
+    }
+
+    /**
+     * Read and cache account-controlled site settings from the NewTXT API.
+     */
+    public function accountSettings(bool $forceRefresh = false): array
+    {
+        $siteKey = $this->publicKey();
+        if ($siteKey === '') {
+            return [];
+        }
+
+        $load = function (): array {
+            try {
+                $settings = $this->client->siteSettings();
+
+                return is_array($settings) ? $settings : [];
+            } catch (Throwable) {
+                return [];
+            }
+        };
+
+        $ttl = max(0, (int) $this->config->get('newtxt.account_settings_cache_ttl', 300));
+        if ($forceRefresh || $ttl === 0) {
+            return $load();
+        }
+
+        $prefix = trim((string) $this->config->get('newtxt.account_settings_cache_prefix', 'newtxt:account-settings'), ':');
+
+        return $this->cacheStore()->remember($prefix . ':' . sha1($siteKey), $ttl, $load);
+    }
+
+    /**
      * Determine whether the first path segment is a configured target language.
      */
     public function extractLanguageFromPath(string $path): ?string
@@ -233,7 +276,7 @@ class NewtxtManager
             return null;
         }
 
-        return in_array($candidate, $this->targetLanguages(), true) ? $candidate : null;
+        return $this->canServeTranslatedPages() && in_array($candidate, $this->targetLanguages(), true) ? $candidate : null;
     }
 
     /**
@@ -266,17 +309,17 @@ class NewtxtManager
             return $rendered;
         }
 
-        $siteId = $this->siteId();
+        $siteId = trim((string) ($rendered['siteId'] ?? $this->siteId()));
         if ($siteId === '') {
             return $rendered;
         }
 
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $path = $this->normalizePath($path);
-        $urlMode = (string) ($options['urlMode'] ?? $rendered['urlMode'] ?? $this->config->get('newtxt.url_mode', 'path'));
+        $urlMode = (string) ($options['urlMode'] ?? $rendered['urlMode'] ?? $this->urlMode());
         $html = $rendered['html'];
 
-        if ((bool) $this->config->get('newtxt.inject_seo_metadata', true)) {
+        if ($this->injectSeoMetadata()) {
             $html = $this->seo->apply($html, $this->seoMetadataForRenderedPage($rendered, $options));
             $rendered['html'] = $html;
         }
@@ -287,7 +330,7 @@ class NewtxtManager
         $rendered['pageHashVersion'] = $version;
         $rendered['storedAt'] = gmdate('c');
 
-        if ((bool) $this->config->get('newtxt.store_rendered_pages', true)) {
+        if ($this->cacheTranslatedPages() && (bool) $this->config->get('newtxt.store_rendered_pages', true)) {
             $this->snapshots->put(array_merge($rendered, [
                 'siteId' => $siteId,
                 'languageCode' => $languageCode,
@@ -307,7 +350,7 @@ class NewtxtManager
     {
         $metadata = [
             'canonicalUrl' => $rendered['translatedUrl'] ?? null,
-            'robots' => $this->config->get('newtxt.seo_robots', 'index,follow'),
+            'robots' => $this->seoRobots(),
         ];
 
         if (isset($rendered['linkTags']) && is_array($rendered['linkTags'])) {
@@ -332,7 +375,7 @@ class NewtxtManager
     private function cacheKey(string $languageCode, string $path, array $options = []): string
     {
         $siteId = $this->siteId() ?: 'unknown-site';
-        $urlMode = (string) ($options['urlMode'] ?? $this->config->get('newtxt.url_mode', 'path'));
+        $urlMode = (string) ($options['urlMode'] ?? $this->urlMode());
         $query = (string) ($options['query'] ?? '');
         $hash = sha1(json_encode([$siteId, $languageCode, $urlMode, $path, $query], JSON_THROW_ON_ERROR));
 
@@ -362,16 +405,186 @@ class NewtxtManager
      */
     private function siteId(): string
     {
-        return trim((string) $this->config->get('newtxt.site_id', ''));
+        $configured = trim((string) $this->config->get('newtxt.site_id', ''));
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        return trim((string) Arr::get($this->accountSettings(), 'siteId', ''));
+    }
+
+    /**
+     * Return the public dashboard key used for widget and public SEO endpoints.
+     */
+    private function publicKey(): string
+    {
+        return trim((string) $this->config->get('newtxt.public_key', ''));
+    }
+
+    /**
+     * Return account source language with a local fallback.
+     */
+    private function sourceLanguage(): string
+    {
+        return $this->normalizeLanguageCode((string) $this->firstAccountValue([
+            'sourceLanguageCode',
+            'sourceLanguage',
+            'site.sourceLanguage',
+            'settings.sourceLanguage',
+        ], $this->config->get('newtxt.source_language', 'en')));
+    }
+
+    /**
+     * Return account URL mode with a local fallback.
+     */
+    private function urlMode(): string
+    {
+        $value = strtolower(trim((string) $this->firstAccountValue([
+            'defaultUrlMode',
+            'urlMode',
+            'widgetSettings.defaultUrlMode',
+            'settings.defaultUrlMode',
+            'rendering.urlMode',
+        ], $this->config->get('newtxt.url_mode', 'path'))));
+
+        return in_array($value, ['path', 'subdomain'], true) ? $value : 'path';
+    }
+
+    /**
+     * Return account widget navigation mode with a local fallback.
+     */
+    private function navigationMode(): string
+    {
+        $value = strtolower(trim((string) $this->firstAccountValue([
+            'navigationMode',
+            'widgetSettings.navigationMode',
+            'settings.navigationMode',
+            'widget.navigationMode',
+        ], $this->config->get('newtxt.navigation_mode', 'redirect'))));
+
+        return in_array($value, ['redirect', 'replace'], true) ? $value : 'redirect';
+    }
+
+    /**
+     * Return account rendering mode with a local fallback.
+     */
+    private function translationMode(): string
+    {
+        $value = strtolower(trim((string) $this->firstAccountValue([
+            'translationMode',
+            'widgetSettings.translationMode',
+            'settings.translationMode',
+        ], 'seo')));
+
+        return in_array($value, ['seo', 'client'], true) ? $value : 'seo';
+    }
+
+    /**
+     * Return whether rendered translated pages should use local cache/artifacts.
+     */
+    private function cacheTranslatedPages(): bool
+    {
+        return $this->boolAccountValue(['cacheTranslatedPages', 'widgetSettings.cacheTranslatedPages', 'settings.cacheTranslatedPages'], true);
+    }
+
+    /**
+     * Return whether local SEO metadata injection is enabled.
+     */
+    private function injectSeoMetadata(): bool
+    {
+        return $this->boolAccountValue(['injectSeoMetadata', 'settings.injectSeoMetadata'], (bool) $this->config->get('newtxt.inject_seo_metadata', true));
+    }
+
+    /**
+     * Return account robots metadata with a local fallback.
+     */
+    private function seoRobots(): string
+    {
+        $value = trim((string) $this->firstAccountValue([
+            'seoRobots',
+            'settings.seoRobots',
+            'rendering.seoRobots',
+        ], $this->config->get('newtxt.seo_robots', 'index,follow')));
+
+        return $value !== '' ? $value : 'index,follow';
     }
 
     /**
      * Return configured target languages as normalized codes.
      */
-    private function targetLanguages(): array
+    public function targetLanguages(): array
     {
-        return collect(Arr::wrap($this->config->get('newtxt.target_languages', [])))
+        $languages = $this->normalizeLanguageList($this->firstAccountValue([
+            'targetLanguages',
+            'site.targetLanguages',
+            'languages',
+            'settings.targetLanguages',
+        ], []), true);
+
+        if ($languages !== []) {
+            return $languages;
+        }
+
+        return $this->normalizeLanguageList($this->config->get('newtxt.target_languages', []));
+    }
+
+    /**
+     * Return the first non-empty value from account settings.
+     */
+    private function firstAccountValue(array $keys, mixed $default = null): mixed
+    {
+        $settings = $this->accountSettings();
+        foreach ($keys as $key) {
+            $value = Arr::get($settings, $key);
+            if ($value !== null && $value !== '') {
+                return $value;
+            }
+        }
+
+        return $default;
+    }
+
+    /**
+     * Return a boolean account setting with strict fallback behavior.
+     */
+    private function boolAccountValue(array $keys, bool $default): bool
+    {
+        $value = $this->firstAccountValue($keys, null);
+        if ($value === null) {
+            return $default;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $default;
+    }
+
+    /**
+     * Normalize string, CSV, or API object language lists.
+     */
+    private function normalizeLanguageList(mixed $languages, bool $excludeDefault = false): array
+    {
+        if (is_string($languages)) {
+            $languages = explode(',', $languages);
+        }
+
+        return collect(Arr::wrap($languages))
+            ->map(function ($language) use ($excludeDefault) {
+                if (is_array($language)) {
+                    if ($excludeDefault && filter_var($language['isDefault'] ?? false, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true) {
+                        return null;
+                    }
+
+                    $isActive = $language['isActive'] ?? $language['active'] ?? true;
+                    if (filter_var($isActive, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === false) {
+                        return null;
+                    }
+
+                    return $language['languageCode'] ?? $language['code'] ?? null;
+                }
+
+                return $language;
+            })
             ->map(fn ($language) => strtolower(trim((string) $language)))
+            ->filter(fn ($language) => preg_match('/^[a-z0-9_-]{2,20}$/', $language) === 1)
             ->filter()
             ->unique()
             ->values()

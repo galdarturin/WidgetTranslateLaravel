@@ -5,7 +5,8 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 ## Responsibilities
 
 - Render the language switcher from Laravel with `@newtxtWidget()`.
-- Call the NewTXT API from the server with `NEWTXT_API_TOKEN`.
+- Call the NewTXT API from the server with dashboard-issued API, public, and private keys.
+- Read languages, URL mode, rendering mode, and rendered-page cache policy from the NewTXT account.
 - Serve translated public HTML through `newtxt.render` middleware.
 - Store translated HTML in the configured Laravel cache store.
 - Store source-text hash translations under the project storage directory.
@@ -50,34 +51,19 @@ Packagist API tokens are deployment credentials. Do not commit them, add them to
 
 ## Environment
 
+The API and CDN URLs are owned by the package because all customer installs use the same NewTXT infrastructure. Customers only need the keys generated in the NewTXT dashboard:
+
 ```dotenv
 NEWTXT_ENABLED=true
-NEWTXT_SITE_ID=00000000-0000-0000-0000-000000000000
-NEWTXT_WIDGET_KEY=widget-key
-NEWTXT_API_TOKEN=replace-with-server-api-token
-NEWTXT_API_BASE_URL=https://api.newtxt.io/api/v1
-NEWTXT_SOURCE_LANGUAGE=en
-NEWTXT_TARGET_LANGUAGES=fr,de,es
-NEWTXT_URL_MODE=path
-NEWTXT_CACHE_STORE=redis
-NEWTXT_CACHE_TTL=86400
-NEWTXT_STORAGE_PATH=/absolute/path/to/storage/app/newtxt
-NEWTXT_STORE_HASHED_TRANSLATIONS=true
-NEWTXT_STORE_RENDERED_PAGES=true
-NEWTXT_STORE_RENDERED_HTML=true
-NEWTXT_STORE_SOURCE_PAGE_HASHES=true
-NEWTXT_STORE_SOURCE_HTML=false
-NEWTXT_SYNC_HASHED_TRANSLATIONS_ON_PREWARM=true
-NEWTXT_INJECT_SEO_METADATA=true
-NEWTXT_SEO_ROBOTS=index,follow
-NEWTXT_PAGE_HASH_VERSION=newtxt-laravel-v1
+NEWTXT_PUBLIC_KEY=replace-with-dashboard-public-key
+NEWTXT_API_KEY=replace-with-dashboard-api-key
+NEWTXT_PRIVATE_KEY=replace-with-dashboard-private-key
 NEWTXT_CALLBACK_ENABLED=false
-NEWTXT_CALLBACK_PATH=/newtxt/callback
-NEWTXT_CALLBACK_SECRET=replace-with-random-callback-secret
-NEWTXT_CALLBACK_ACTIONS=health.check,cache.clear,page.prewarm,translations.sync
 ```
 
-`NEWTXT_API_TOKEN` and `NEWTXT_CALLBACK_SECRET` are server-only. Do not render them into Blade, JavaScript, logs, or cached HTML.
+`NEWTXT_PUBLIC_KEY` is safe to render into the widget script tag. `NEWTXT_API_KEY`, `NEWTXT_PRIVATE_KEY`, and `NEWTXT_CALLBACK_SECRET` are server-only. The API key is sent only on signed server-side integration requests. The private key signs those requests and is never sent as a header value. Do not render server-only keys into Blade, JavaScript, logs, or cached HTML.
+
+Source language, target languages, URL mode, widget rendering mode, SEO mode, and translated-page cache policy are read from the customer's NewTXT account. Do not duplicate those values in application `.env` files.
 
 ## Route Middleware
 
@@ -109,7 +95,7 @@ php artisan newtxt:prewarm --language=fr --path=/
 php artisan newtxt:prewarm --language=fr --sitemap=https://example.com/sitemap.xml
 ```
 
-When `NEWTXT_SYNC_HASHED_TRANSLATIONS_ON_PREWARM=true`, prewarm also syncs translated nodes into the local hashed translation store.
+When `sync_hashed_translations_on_prewarm` is enabled in the published package config, prewarm also syncs translated nodes into the local hashed translation store. If no `--language` option is passed, the command uses target languages from the NewTXT account.
 
 Sitemap prewarm accepts only public `http` and `https` URLs and blocks localhost, private IP, and reserved IP targets. The package does not crawl websites or generate translations by itself; it uses sitemap URLs only to collect source paths and then calls the NewTXT API for rendered pages and translated nodes.
 
@@ -143,13 +129,13 @@ storage/app/newtxt/pages/{siteId}/{languageCode}/{pageHash}.json
 storage/app/newtxt/pages/{siteId}/{languageCode}/{pageHash}.html
 ```
 
-`pageHash` includes the package hash version, site ID, language, URL mode, source path, and normalized HTML hash. Bump `NEWTXT_PAGE_HASH_VERSION` when the application needs to invalidate old page artifacts after a rendering policy change.
+`pageHash` includes the package hash version, site ID, language, URL mode, source path, and normalized HTML hash. Bump `page_hash_version` in the published package config when the application needs to invalidate old page artifacts after a rendering policy change.
 
-For source pages, the middleware can record the final Laravel HTML response hash when `NEWTXT_STORE_SOURCE_PAGE_HASHES=true`. Full source HTML is stored only when `NEWTXT_STORE_SOURCE_HTML=true`.
+For source pages, the middleware can record the final Laravel HTML response hash when `store_source_page_hashes` is enabled in the published package config. Full source HTML is stored only when `store_source_html` is enabled.
 
 ## SEO Metadata
 
-When `NEWTXT_INJECT_SEO_METADATA=true`, rendered translated HTML receives a local SEO pass before it is cached or written to storage. The pass upserts:
+When local SEO metadata injection is enabled in the package config or account settings, rendered translated HTML receives a local SEO pass before it is cached or written to storage. The pass upserts:
 
 - `<link rel="canonical">`
 - `<meta property="og:url">`
@@ -171,7 +157,7 @@ X-NewTXT-Signature: sha256=<hmac>
 
 The HMAC is `hash_hmac('sha256', $timestamp . '.' . $rawBody, $callbackSecret)`. Requests outside `NEWTXT_CALLBACK_TOLERANCE_SECONDS` are rejected.
 
-Supported actions are controlled by `NEWTXT_CALLBACK_ACTIONS`:
+Supported actions are controlled by `callback_allowed_actions` in the published package config:
 
 ```json
 {

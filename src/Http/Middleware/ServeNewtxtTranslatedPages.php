@@ -40,7 +40,6 @@ class ServeNewtxtTranslatedPages
         $sourcePath = $this->newtxt->sourcePathForTranslatedPath($request->path(), $languageCode);
         $rendered = $this->newtxt->rememberRenderedPage($languageCode, $sourcePath, [
             'query' => $request->getQueryString() ?? '',
-            'urlMode' => config('newtxt.url_mode', 'path'),
         ]);
 
         if (!is_array($rendered) || !isset($rendered['html'])) {
@@ -65,7 +64,7 @@ class ServeNewtxtTranslatedPages
      */
     private function shouldAttemptTranslation(Request $request): bool
     {
-        if (!$this->newtxt->enabled()) {
+        if (!$this->newtxt->canServeTranslatedPages()) {
             return false;
         }
 
@@ -107,7 +106,6 @@ class ServeNewtxtTranslatedPages
         try {
             $this->newtxt->recordSourcePage('/' . ltrim($request->path(), '/'), $content, [
                 'query' => $request->getQueryString() ?? '',
-                'urlMode' => config('newtxt.url_mode', 'path'),
             ]);
         } catch (Throwable) {
             // Source-page snapshot failures must not break customer pages.

@@ -34,8 +34,9 @@ class NewtxtServiceProvider extends ServiceProvider
         $this->app->singleton(NewtxtClient::class, function ($app) {
             return new NewtxtClient(
                 $app->make(HttpFactory::class),
-                (string) config('newtxt.api_base_url'),
-                (string) config('newtxt.api_token'),
+                (string) config('newtxt.api_key'),
+                (string) config('newtxt.public_key'),
+                (string) config('newtxt.private_key'),
             );
         });
 
