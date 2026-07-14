@@ -233,6 +233,65 @@ class NewtxtManager
     }
 
     /**
+     * Return sitemap entries for locally stored translated page snapshots.
+     *
+     * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool}  $options
+     * @return list<array{loc:string,lastmod:string,languageCode:string,path:string,urlMode:string,pageHash:string,htmlHash:?string}>
+     */
+    public function renderedPageSitemapEntries(?string $siteUrl = null, array $options = []): array
+    {
+        if (!$this->canServeTranslatedPages()) {
+            return [];
+        }
+
+        $languages = $this->normalizeLanguageList($options['languages'] ?? $this->targetLanguages(), true);
+        if ($languages === []) {
+            return [];
+        }
+
+        $siteId = trim((string) ($options['siteId'] ?? $this->siteId()));
+        $urlModeFilter = $this->normalizeUrlMode($options['urlMode'] ?? null);
+        $includeQueryStrings = filter_var($options['includeQueryStrings'] ?? false, FILTER_VALIDATE_BOOL);
+        $baseSiteUrl = $this->normalizeSitemapSiteUrl($siteUrl ?? $this->config->get('app.url'));
+        if ($baseSiteUrl === null) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($this->snapshots->allForSitemap($siteId !== '' ? $siteId : null, $languages) as $snapshot) {
+            $languageCode = $this->normalizeLanguageCode((string) ($snapshot['languageCode'] ?? ''));
+            if (!in_array($languageCode, $languages, true)) {
+                continue;
+            }
+
+            $urlMode = $this->normalizeUrlMode($snapshot['urlMode'] ?? null);
+            if ($urlMode === null || ($urlModeFilter !== null && $urlMode !== $urlModeFilter)) {
+                continue;
+            }
+
+            $query = ltrim(trim((string) ($snapshot['query'] ?? '')), '?');
+            if ($query !== '' && (!$includeQueryStrings || $this->hasUnsafeUrlPart($query))) {
+                continue;
+            }
+
+            $path = $this->normalizePath((string) ($snapshot['path'] ?? '/'));
+            $loc = $this->localizedSitemapUrl($baseSiteUrl, $path, $languageCode, $urlMode, $query);
+
+            $entries[] = [
+                'loc' => $loc,
+                'lastmod' => $this->sitemapLastModified($snapshot['updatedAt'] ?? $snapshot['storedAt'] ?? null),
+                'languageCode' => $languageCode,
+                'path' => $path,
+                'urlMode' => $urlMode,
+                'pageHash' => (string) ($snapshot['pageHash'] ?? ''),
+                'htmlHash' => isset($snapshot['htmlHash']) ? (string) $snapshot['htmlHash'] : null,
+            ];
+        }
+
+        return $entries;
+    }
+
+    /**
      * Return true when the integration can perform server-side work.
      */
     public function enabled(): bool
@@ -499,6 +558,13 @@ class NewtxtManager
         return in_array($value, ['path', 'subdomain'], true) ? $value : 'path';
     }
 
+    private function normalizeUrlMode(mixed $value): ?string
+    {
+        $mode = strtolower(trim((string) $value));
+
+        return in_array($mode, ['path', 'subdomain'], true) ? $mode : null;
+    }
+
     /**
      * Return account widget navigation mode with a local fallback.
      */
@@ -638,6 +704,79 @@ class NewtxtManager
             ->unique()
             ->values()
             ->all();
+    }
+
+    private function normalizeSitemapSiteUrl(mixed $siteUrl): ?string
+    {
+        $siteUrl = trim((string) $siteUrl);
+        if ($siteUrl === '') {
+            return null;
+        }
+
+        $parts = parse_url($siteUrl);
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+
+        return "{$scheme}://{$host}{$port}";
+    }
+
+    private function localizedSitemapUrl(string $siteUrl, string $path, string $languageCode, string $urlMode, string $query = ''): string
+    {
+        $baseUrl = $urlMode === 'subdomain'
+            ? $this->languageSubdomainSiteUrl($siteUrl, $languageCode)
+            : $siteUrl;
+        $localizedPath = $urlMode === 'subdomain'
+            ? $this->normalizePath($path)
+            : $this->localizedPath($path, $languageCode);
+        $url = rtrim($baseUrl, '/') . $localizedPath;
+
+        return $query !== '' ? "{$url}?{$query}" : $url;
+    }
+
+    private function localizedPath(string $path, string $languageCode): string
+    {
+        $path = $this->normalizePath($path);
+
+        return '/' . trim($languageCode, '/') . ($path === '/' ? '' : $path);
+    }
+
+    private function languageSubdomainSiteUrl(string $siteUrl, string $languageCode): string
+    {
+        $parts = parse_url($siteUrl);
+        if (!is_array($parts)) {
+            return $siteUrl;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? 'https'));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if ($host === '') {
+            return $siteUrl;
+        }
+
+        $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+
+        return "{$scheme}://{$languageCode}.{$host}{$port}";
+    }
+
+    private function sitemapLastModified(mixed $value): string
+    {
+        $timestamp = is_string($value) && trim($value) !== '' ? strtotime($value) : false;
+
+        return gmdate('c', $timestamp !== false ? $timestamp : time());
+    }
+
+    private function hasUnsafeUrlPart(string $value): bool
+    {
+        return preg_match('/[\r\n#]/', $value) === 1;
     }
 
     /**

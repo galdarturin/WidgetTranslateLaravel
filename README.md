@@ -14,7 +14,8 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 - Inject canonical, robots, Open Graph, and Twitter URL metadata into rendered translated HTML.
 - Prewarm translated pages with Artisan commands.
 - Read public sitemap URLs only to resolve paths for local prewarm.
-- Keep crawling, AI translation, translation orchestration, and sitemap generation inside the NewTXT service.
+- Expose local rendered page snapshot metadata for application-owned sitemap generation.
+- Keep crawling, AI translation, and translation orchestration inside the NewTXT service.
 - Keep private routes, account pages, checkout pages, APIs, and webhooks out of translation middleware.
 
 ## Install
@@ -140,6 +141,14 @@ storage/app/newtxt/pages/{siteId}/{languageCode}/indexes/{lookupHash}.json
 
 For source pages, the middleware can record the final Laravel HTML response hash when `store_source_page_hashes` is enabled in the published package config. Full source HTML is stored only when `store_source_html` is enabled.
 
+Applications that own their sitemap can include locally stored translated snapshots through:
+
+```php
+$entries = Newtxt::renderedPageSitemapEntries('https://example.com');
+```
+
+The package builds sitemap locations from the provided site URL, stored source path, language code, and URL mode. Query-string snapshots are excluded by default.
+
 ## SEO Metadata
 
 When local SEO metadata injection is enabled in the package config or account settings, rendered translated HTML receives a local SEO pass before it is cached or written to storage. The pass upserts:
@@ -205,6 +214,7 @@ use Newtxt\Laravel\Facades\Newtxt;
 $rendered = Newtxt::rememberRenderedPage('fr', '/about');
 $snippet = Newtxt::widgetSnippet();
 $stored = Newtxt::syncHashedTranslations('fr', '/about');
+$sitemapEntries = Newtxt::renderedPageSitemapEntries('https://example.com');
 ```
 
 Use direct API calls for controlled application workflows. Keep route middleware scoped to public pages for normal request handling.

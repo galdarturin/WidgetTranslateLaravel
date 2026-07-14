@@ -102,6 +102,70 @@ class RenderedPageSnapshotStore
     }
 
     /**
+     * List stored rendered page snapshot metadata for sitemap integrations.
+     *
+     * @param  list<string>|null  $languageCodes
+     * @return list<array<string,mixed>>
+     */
+    public function allForSitemap(?string $siteId = null, ?array $languageCodes = null): array
+    {
+        $basePath = $this->basePath() . '/pages';
+        if (!$this->files->isDirectory($basePath)) {
+            return [];
+        }
+
+        $allowedLanguages = $this->languageFilter($languageCodes);
+        $siteDirectories = $this->siteDirectories($basePath, $siteId);
+        $snapshots = [];
+
+        foreach ($siteDirectories as $siteDirectory) {
+            $safeSiteId = basename($siteDirectory);
+
+            foreach ($this->files->directories($siteDirectory) as $languageDirectory) {
+                $safeLanguageCode = basename($languageDirectory);
+                if ($allowedLanguages !== null && !isset($allowedLanguages[$safeLanguageCode])) {
+                    continue;
+                }
+
+                foreach ($this->files->files($languageDirectory) as $file) {
+                    if (strtolower($file->getExtension()) !== 'json') {
+                        continue;
+                    }
+
+                    $metadata = $this->readJson($file->getPathname());
+                    if (!$this->isSitemapSnapshot($metadata)) {
+                        continue;
+                    }
+
+                    $metadata['siteId'] = (string) ($metadata['siteId'] ?? $safeSiteId);
+                    $metadata['languageCode'] = $this->normalizeLanguageCode((string) ($metadata['languageCode'] ?? $safeLanguageCode));
+                    $metadata['path'] = $this->normalizePath((string) $metadata['path']);
+                    $metadata['query'] = $this->normalizeQuery((string) ($metadata['query'] ?? ''));
+                    $metadata['urlMode'] = strtolower(trim((string) $metadata['urlMode']));
+
+                    $snapshots[] = $metadata;
+                }
+            }
+        }
+
+        usort($snapshots, static function (array $left, array $right): int {
+            return [
+                (string) ($left['languageCode'] ?? ''),
+                (string) ($left['path'] ?? ''),
+                (string) ($left['query'] ?? ''),
+                (string) ($left['pageHash'] ?? ''),
+            ] <=> [
+                (string) ($right['languageCode'] ?? ''),
+                (string) ($right['path'] ?? ''),
+                (string) ($right['query'] ?? ''),
+                (string) ($right['pageHash'] ?? ''),
+            ];
+        });
+
+        return $snapshots;
+    }
+
+    /**
      * Store the request identity index used for fast local reads.
      */
     private function putIndex(string $siteId, string $languageCode, array $metadata): void
@@ -149,6 +213,51 @@ class RenderedPageSnapshotStore
         $decoded = json_decode($this->files->get($path), true);
 
         return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function siteDirectories(string $basePath, ?string $siteId): array
+    {
+        $siteId = trim((string) $siteId);
+        if ($siteId !== '') {
+            $directory = $basePath . '/' . $this->sanitizePathPart($siteId);
+
+            return $this->files->isDirectory($directory) ? [$directory] : [];
+        }
+
+        return $this->files->directories($basePath);
+    }
+
+    /**
+     * @param  list<string>|null  $languageCodes
+     * @return array<string,true>|null
+     */
+    private function languageFilter(?array $languageCodes): ?array
+    {
+        if ($languageCodes === null) {
+            return null;
+        }
+
+        $filter = [];
+        foreach ($languageCodes as $languageCode) {
+            $normalized = $this->normalizeLanguageCode((string) $languageCode);
+            if ($normalized !== 'unknown') {
+                $filter[$normalized] = true;
+            }
+        }
+
+        return $filter;
+    }
+
+    private function isSitemapSnapshot(?array $metadata): bool
+    {
+        return is_array($metadata) &&
+            trim((string) ($metadata['pageHash'] ?? '')) !== '' &&
+            trim((string) ($metadata['languageCode'] ?? '')) !== '' &&
+            trim((string) ($metadata['path'] ?? '')) !== '' &&
+            trim((string) ($metadata['urlMode'] ?? '')) !== '';
     }
 
     /**
@@ -205,6 +314,14 @@ class RenderedPageSnapshotStore
     private function normalizeQuery(string $query): string
     {
         return ltrim(trim($query), '?');
+    }
+
+    /**
+     * Normalize language codes for artifact directory names.
+     */
+    private function normalizeLanguageCode(string $languageCode): string
+    {
+        return preg_replace('/[^A-Za-z0-9_-]/', '_', strtolower(trim($languageCode))) ?: 'unknown';
     }
 
     /**
