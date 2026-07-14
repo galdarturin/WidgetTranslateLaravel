@@ -110,6 +110,8 @@ class NewtxtCallbackController extends Controller
             'htmlHash' => $rendered['htmlHash'] ?? null,
             'pageHash' => $rendered['pageHash'] ?? null,
             'fromCache' => (bool) ($rendered['fromCache'] ?? false),
+            'fromLocalSnapshot' => (bool) ($rendered['fromLocalSnapshot'] ?? false),
+            'cacheSource' => $rendered['cacheSource'] ?? null,
             'storedAt' => $rendered['storedAt'] ?? null,
         ];
     }

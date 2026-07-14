@@ -48,7 +48,7 @@ class ServeNewtxtTranslatedPages
 
         $response = response($rendered['html'], 200)
             ->header('Content-Type', 'text/html; charset=UTF-8')
-            ->header('X-NewTXT-Cache', ($rendered['fromCache'] ?? false) ? 'remote-hit' : 'remote-miss');
+            ->header('X-NewTXT-Cache', $this->cacheHeader($rendered));
 
         foreach (['pageHash' => 'X-NewTXT-Page-Hash', 'htmlHash' => 'X-NewTXT-Html-Hash'] as $key => $header) {
             if (isset($rendered[$key]) && is_string($rendered[$key]) && $rendered[$key] !== '') {
@@ -57,6 +57,18 @@ class ServeNewtxtTranslatedPages
         }
 
         return $response;
+    }
+
+    /**
+     * Expose the cache source without leaking internal storage paths.
+     */
+    private function cacheHeader(array $rendered): string
+    {
+        if (($rendered['cacheSource'] ?? null) === 'local-snapshot' || ($rendered['fromLocalSnapshot'] ?? false) === true) {
+            return 'local-hit';
+        }
+
+        return ($rendered['fromCache'] ?? false) ? 'remote-hit' : 'remote-miss';
     }
 
     /**

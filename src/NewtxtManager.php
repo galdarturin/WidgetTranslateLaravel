@@ -85,8 +85,9 @@ class NewtxtManager
     /**
      * Render translated HTML and store it in Laravel cache.
      *
-     * The cache key includes language, source path, query string, URL mode, and
-     * site identity so different public pages never share translated HTML.
+     * The cache key includes language, source path, query string, URL mode,
+     * site identity, and page hash version so different public pages never
+     * share translated HTML.
      */
     public function rememberRenderedPage(string $languageCode, string $path, array $options = []): ?array
     {
@@ -104,7 +105,8 @@ class NewtxtManager
         }
 
         return $this->cacheStore()->remember($cacheKey, $ttl, function () use ($languageCode, $path, $options) {
-            return $this->renderPage($languageCode, $path, $options);
+            return $this->localRenderedPageSnapshot($languageCode, $path, $options)
+                ?? $this->renderPage($languageCode, $path, $options);
         });
     }
 
@@ -118,7 +120,18 @@ class NewtxtManager
     public function clearRenderedPageCache(?string $languageCode = null, ?string $path = null): void
     {
         if ($languageCode !== null && $path !== null) {
+            $languageCode = $this->normalizeLanguageCode($languageCode);
+            $path = $this->normalizePath($path);
             $this->cacheStore()->forget($this->cacheKey($languageCode, $path));
+            $this->snapshots->forget(
+                $this->siteId() ?: 'unknown-site',
+                $languageCode,
+                $this->urlMode(),
+                $path,
+                '',
+                $this->pageHashVersion(),
+            );
+
             return;
         }
 
@@ -324,7 +337,7 @@ class NewtxtManager
             $rendered['html'] = $html;
         }
 
-        $version = (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v1');
+        $version = $this->pageHashVersion();
         $rendered['htmlHash'] = $this->hasher->htmlHash($html);
         $rendered['pageHash'] = $this->hasher->pageHash($siteId, $languageCode, $urlMode, $path, $html, $version);
         $rendered['pageHashVersion'] = $version;
@@ -377,9 +390,37 @@ class NewtxtManager
         $siteId = $this->siteId() ?: 'unknown-site';
         $urlMode = (string) ($options['urlMode'] ?? $this->urlMode());
         $query = (string) ($options['query'] ?? '');
-        $hash = sha1(json_encode([$siteId, $languageCode, $urlMode, $path, $query], JSON_THROW_ON_ERROR));
+        $hash = sha1(json_encode([$siteId, $languageCode, $urlMode, $path, $query, $this->pageHashVersion()], JSON_THROW_ON_ERROR));
 
         return trim((string) $this->config->get('newtxt.cache_prefix', 'newtxt:rendered-pages'), ':') . ':' . $hash;
+    }
+
+    /**
+     * Read a rendered HTML snapshot from project-local storage.
+     */
+    private function localRenderedPageSnapshot(string $languageCode, string $path, array $options = []): ?array
+    {
+        if (!(bool) $this->config->get('newtxt.store_rendered_pages', true) || !(bool) $this->config->get('newtxt.store_rendered_html', true)) {
+            return null;
+        }
+
+        $siteId = $this->siteId();
+        if ($siteId === '') {
+            return null;
+        }
+
+        try {
+            return $this->snapshots->get(
+                $siteId,
+                $languageCode,
+                (string) ($options['urlMode'] ?? $this->urlMode()),
+                $path,
+                (string) ($options['query'] ?? ''),
+                $this->pageHashVersion(),
+            );
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -398,6 +439,14 @@ class NewtxtManager
     private function normalizeLanguageCode(string $languageCode): string
     {
         return strtolower(trim($languageCode));
+    }
+
+    /**
+     * Return the current page hash/cache version.
+     */
+    private function pageHashVersion(): string
+    {
+        return (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v1');
     }
 
     /**

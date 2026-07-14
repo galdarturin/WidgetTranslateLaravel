@@ -101,6 +101,8 @@ php artisan newtxt:prewarm --language=fr --sitemap=https://example.com/sitemap.x
 
 When `sync_hashed_translations_on_prewarm` is enabled in the published package config, prewarm also syncs translated nodes into the local hashed translation store. If no `--language` option is passed, the command uses target languages from the NewTXT account.
 
+Rendered HTML is stored in the Laravel cache store and as a project-local HTML snapshot. If the Laravel cache entry is missing later, the middleware rehydrates it from `storage/app/newtxt` before making a remote render request.
+
 Sitemap prewarm accepts only public `http` and `https` URLs and blocks localhost, private IP, and reserved IP targets. The package does not crawl websites or generate translations by itself; it uses sitemap URLs only to collect source paths and then calls the NewTXT API for rendered pages and translated nodes.
 
 ## Hashed Translation Store
@@ -131,9 +133,10 @@ Translated renders are hashed after the local SEO pass. The package writes metad
 ```text
 storage/app/newtxt/pages/{siteId}/{languageCode}/{pageHash}.json
 storage/app/newtxt/pages/{siteId}/{languageCode}/{pageHash}.html
+storage/app/newtxt/pages/{siteId}/{languageCode}/indexes/{lookupHash}.json
 ```
 
-`pageHash` includes the package hash version, site ID, language, URL mode, source path, and normalized HTML hash. Bump `page_hash_version` in the published package config when the application needs to invalidate old page artifacts after a rendering policy change.
+`pageHash` includes the package hash version, site ID, language, URL mode, source path, and normalized HTML hash. `lookupHash` includes the site ID, language, URL mode, source path, query string, and page hash version so translated requests can be served from local storage immediately after prewarm. Bump `page_hash_version` in the published package config when the application needs to invalidate old page artifacts after a rendering policy change.
 
 For source pages, the middleware can record the final Laravel HTML response hash when `store_source_page_hashes` is enabled in the published package config. Full source HTML is stored only when `store_source_html` is enabled.
 
@@ -181,7 +184,7 @@ Built-in actions:
 
 - `health.check` returns package health metadata.
 - `cache.clear` clears one local rendered-page cache entry.
-- `page.prewarm` renders and stores one translated page without returning full HTML.
+- `page.prewarm` renders and stores one translated page without returning full HTML. When a matching local snapshot already exists, it can rehydrate the Laravel cache from local storage instead of calling the remote render API.
 - `translations.sync` writes page node translations into the local hashed translation store.
 
 Leave `NEWTXT_CALLBACK_ENABLED=false` unless a strong callback secret is configured and the callback URL has been registered in NewTXT.
@@ -192,7 +195,7 @@ Leave `NEWTXT_CALLBACK_ENABLED=false` unless a strong callback secret is configu
 php artisan newtxt:cache-clear --language=fr --path=/about
 ```
 
-The package clears one local rendered HTML cache entry at a time. It does not flush the whole Laravel cache store.
+The package clears one local rendered HTML cache entry at a time. It also removes the matching local snapshot lookup index so stale translated HTML is not served after an explicit clear. It does not flush the whole Laravel cache store.
 
 ## Developer API
 

@@ -2,7 +2,9 @@
 
 namespace Newtxt\Laravel\Tests\Feature;
 
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Newtxt\Laravel\Tests\TestCase;
@@ -85,5 +87,89 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 && $request->hasHeader('X-NewTXT-Signature')
                 && !$request->hasHeader('X-NewTXT-Private-Key');
         });
+    }
+
+    public function test_rendered_page_snapshot_rehydrates_local_cache_without_remote_render(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-snapshots-' . bin2hex(random_bytes(6));
+        $renderRequests = 0;
+        $settings = [
+            'siteId' => '00000000-0000-0000-0000-000000000010',
+            'publicKey' => 'public-site-key',
+            'sourceLanguage' => 'en',
+            'defaultUrlMode' => 'path',
+            'navigationMode' => 'redirect',
+            'translationMode' => 'seo',
+            'cacheTranslatedPages' => true,
+            'injectSeoMetadata' => true,
+            'seoRobots' => 'index,follow',
+            'targetLanguages' => [
+                ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+            ],
+        ];
+
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 86400);
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source</title></head><body><main>Source</main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        try {
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response($settings),
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                    $renderRequests++;
+
+                    return Http::response([
+                        'siteId' => '00000000-0000-0000-0000-000000000010',
+                        'languageCode' => 'fr',
+                        'path' => '/about',
+                        'urlMode' => 'path',
+                        'translatedUrl' => 'https://example.test/fr/about',
+                        'fromCache' => false,
+                        'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour from local snapshot</main></body></html>',
+                    ]);
+                },
+            ]);
+
+            $firstResponse = $this->get('/fr/about?utm=campaign');
+            $firstResponse->assertOk();
+            $firstResponse->assertSee('Bonjour from local snapshot', false);
+            $this->assertSame(1, $renderRequests);
+
+            Cache::flush();
+
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response($settings),
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                    $renderRequests++;
+
+                    return Http::response([
+                        'siteId' => '00000000-0000-0000-0000-000000000010',
+                        'languageCode' => 'fr',
+                        'path' => '/about',
+                        'urlMode' => 'path',
+                        'translatedUrl' => 'https://example.test/fr/about',
+                        'fromCache' => false,
+                        'html' => '<html><body>Unexpected remote render</body></html>',
+                    ]);
+                },
+            ]);
+
+            $secondResponse = $this->get('/fr/about?utm=campaign');
+            $secondResponse->assertOk();
+            $secondResponse->assertHeader('X-NewTXT-Cache', 'local-hit');
+            $secondResponse->assertSee('Bonjour from local snapshot', false);
+            $secondResponse->assertDontSee('Unexpected remote render', false);
+            $this->assertSame(1, $renderRequests);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
     }
 }
