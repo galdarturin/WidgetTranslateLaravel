@@ -227,6 +227,21 @@ class SeoMiddlewareIntegrationTest extends TestCase
             $this->assertSame('path', $entries[0]['urlMode']);
             $this->assertNotSame('', $entries[0]['pageHash']);
             $this->assertNotNull($entries[0]['htmlHash']);
+
+            $sitemapEntries = app(NewtxtManager::class)->sitemapEntries([
+                [
+                    'loc' => 'https://example.test/blog/travel-georgia-7-days',
+                    'lastmod' => '2026-07-14T00:00:00+00:00',
+                    'changefreq' => 'weekly',
+                    'priority' => '0.7',
+                ],
+            ], 'https://example.test', ['urlMode' => 'path']);
+            $locations = array_column($sitemapEntries, 'loc');
+
+            $this->assertContains('https://example.test/blog/travel-georgia-7-days', $locations);
+            $this->assertContains('https://example.test/fr/blog/travel-georgia-7-days', $locations);
+            $this->assertContains('https://example.test/fr/about', $locations);
+            $this->assertNotContains('https://fr.example.test/blog/travel-georgia-7-days', $locations);
         } finally {
             (new Filesystem())->deleteDirectory($storagePath);
         }

@@ -233,6 +233,84 @@ class NewtxtManager
     }
 
     /**
+     * Build a complete sitemap list with NewTXT translated entries.
+     *
+     * The host application owns source URL discovery because it knows its
+     * routes and database records. NewTXT owns language selection, translated
+     * URL construction, and stored translated page snapshot inclusion.
+     *
+     * @param  list<array{loc:string,lastmod:string,changefreq:string,priority:string}>  $sourceEntries
+     * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool}  $options
+     * @return list<array{loc:string,lastmod:string,changefreq:string,priority:string}>
+     */
+    public function sitemapEntries(array $sourceEntries, ?string $siteUrl = null, array $options = []): array
+    {
+        $entries = array_values($sourceEntries);
+        if (!$this->canServeTranslatedPages()) {
+            return $entries;
+        }
+
+        $languages = $this->sitemapLanguages($options['languages'] ?? null);
+        if ($languages === []) {
+            return $entries;
+        }
+
+        $baseSiteUrl = $this->normalizeSitemapSiteUrl($siteUrl ?? $this->config->get('app.url'));
+        if ($baseSiteUrl === null) {
+            return $entries;
+        }
+
+        $urlMode = $this->normalizeUrlMode($options['urlMode'] ?? $this->urlMode()) ?? 'path';
+        $seen = [];
+
+        foreach ($entries as $entry) {
+            if (isset($entry['loc']) && is_string($entry['loc'])) {
+                $seen[$entry['loc']] = true;
+            }
+        }
+
+        foreach ($sourceEntries as $entry) {
+            $path = $this->sitemapEntryPath($entry);
+            if ($path === null || !$this->isSitemapPathAllowed($path)) {
+                continue;
+            }
+
+            foreach ($languages as $languageCode) {
+                $loc = $this->localizedSitemapUrl($baseSiteUrl, $path, $languageCode, $urlMode);
+                if (isset($seen[$loc])) {
+                    continue;
+                }
+
+                $seen[$loc] = true;
+                $entries[] = [
+                    ...$entry,
+                    'loc' => $loc,
+                ];
+            }
+        }
+
+        foreach ($this->renderedPageSitemapEntries($baseSiteUrl, array_merge($options, [
+            'languages' => $languages,
+            'urlMode' => $urlMode,
+        ])) as $entry) {
+            $loc = (string) ($entry['loc'] ?? '');
+            if ($loc === '' || isset($seen[$loc])) {
+                continue;
+            }
+
+            $seen[$loc] = true;
+            $entries[] = [
+                'loc' => $loc,
+                'lastmod' => (string) ($entry['lastmod'] ?? $this->sitemapLastModified(null)),
+                'changefreq' => (string) ($entry['changefreq'] ?? 'weekly'),
+                'priority' => (string) ($entry['priority'] ?? '0.6'),
+            ];
+        }
+
+        return $entries;
+    }
+
+    /**
      * Return sitemap entries for locally stored translated page snapshots.
      *
      * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool}  $options
@@ -244,13 +322,13 @@ class NewtxtManager
             return [];
         }
 
-        $languages = $this->normalizeLanguageList($options['languages'] ?? $this->targetLanguages(), true);
+        $languages = $this->sitemapLanguages($options['languages'] ?? null);
         if ($languages === []) {
             return [];
         }
 
         $siteId = trim((string) ($options['siteId'] ?? $this->siteId()));
-        $urlModeFilter = $this->normalizeUrlMode($options['urlMode'] ?? null);
+        $outputUrlMode = $this->normalizeUrlMode($options['urlMode'] ?? null);
         $includeQueryStrings = filter_var($options['includeQueryStrings'] ?? false, FILTER_VALIDATE_BOOL);
         $baseSiteUrl = $this->normalizeSitemapSiteUrl($siteUrl ?? $this->config->get('app.url'));
         if ($baseSiteUrl === null) {
@@ -264,8 +342,8 @@ class NewtxtManager
                 continue;
             }
 
-            $urlMode = $this->normalizeUrlMode($snapshot['urlMode'] ?? null);
-            if ($urlMode === null || ($urlModeFilter !== null && $urlMode !== $urlModeFilter)) {
+            $urlMode = $outputUrlMode ?? $this->normalizeUrlMode($snapshot['urlMode'] ?? null);
+            if ($urlMode === null) {
                 continue;
             }
 
@@ -275,6 +353,10 @@ class NewtxtManager
             }
 
             $path = $this->normalizePath((string) ($snapshot['path'] ?? '/'));
+            if (!$this->isSitemapPathAllowed($path)) {
+                continue;
+            }
+
             $loc = $this->localizedSitemapUrl($baseSiteUrl, $path, $languageCode, $urlMode, $query);
 
             $entries[] = [
@@ -313,7 +395,7 @@ class NewtxtManager
     public function accountSettings(bool $forceRefresh = false): array
     {
         $siteKey = $this->publicKey();
-        if ($siteKey === '') {
+        if ($siteKey === '' || $this->apiKey() === '' || $this->privateKey() === '') {
             return [];
         }
 
@@ -529,6 +611,16 @@ class NewtxtManager
         return trim((string) $this->config->get('newtxt.public_key', ''));
     }
 
+    private function apiKey(): string
+    {
+        return trim((string) $this->config->get('newtxt.api_key', ''));
+    }
+
+    private function privateKey(): string
+    {
+        return trim((string) $this->config->get('newtxt.private_key', ''));
+    }
+
     /**
      * Return account source language with a local fallback.
      */
@@ -641,6 +733,22 @@ class NewtxtManager
         }
 
         return $this->normalizeLanguageList($this->config->get('newtxt.target_languages', []));
+    }
+
+    /**
+     * Normalize language candidates for sitemap output.
+     *
+     * @return list<string>
+     */
+    private function sitemapLanguages(mixed $languages = null): array
+    {
+        $sourceLanguage = $this->sourceLanguage();
+
+        return collect($this->normalizeLanguageList($languages ?? $this->targetLanguages(), true))
+            ->filter(fn (string $language): bool => $language !== $sourceLanguage)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -765,6 +873,56 @@ class NewtxtManager
         $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
 
         return "{$scheme}://{$languageCode}.{$host}{$port}";
+    }
+
+    private function sitemapEntryPath(array $entry): ?string
+    {
+        $loc = trim((string) ($entry['loc'] ?? ''));
+        if ($loc === '') {
+            return null;
+        }
+
+        $query = parse_url($loc, PHP_URL_QUERY);
+        if (is_string($query) && $query !== '') {
+            return null;
+        }
+
+        $path = parse_url($loc, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = '/';
+        }
+
+        if ($this->hasUnsafeUrlPart($path)) {
+            return null;
+        }
+
+        return $this->normalizePath($path);
+    }
+
+    private function isSitemapPathAllowed(string $path): bool
+    {
+        $normalized = strtolower(ltrim($path, '/'));
+        $patterns = (array) $this->config->get('newtxt.excluded_paths', [
+            'admin*',
+            'api*',
+            'auth*',
+            'login',
+            'logout',
+            'register',
+            'account*',
+            'dashboard*',
+            'checkout*',
+            'billing*',
+            'webhooks*',
+        ]);
+
+        foreach ($patterns as $pattern) {
+            if (Str::is(strtolower(ltrim((string) $pattern, '/')), $normalized)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function sitemapLastModified(mixed $value): string

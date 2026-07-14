@@ -14,7 +14,8 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 - Inject canonical, robots, Open Graph, and Twitter URL metadata into rendered translated HTML.
 - Prewarm translated pages with Artisan commands.
 - Read public sitemap URLs only to resolve paths for local prewarm.
-- Expose local rendered page snapshot metadata for application-owned sitemap generation.
+- Build translated sitemap entries from application-provided source sitemap entries.
+- Include local rendered page snapshots in translated sitemap output.
 - Keep crawling, AI translation, and translation orchestration inside the NewTXT service.
 - Keep private routes, account pages, checkout pages, APIs, and webhooks out of translation middleware.
 
@@ -141,13 +142,13 @@ storage/app/newtxt/pages/{siteId}/{languageCode}/indexes/{lookupHash}.json
 
 For source pages, the middleware can record the final Laravel HTML response hash when `store_source_page_hashes` is enabled in the published package config. Full source HTML is stored only when `store_source_html` is enabled.
 
-Applications that own their sitemap can include locally stored translated snapshots through:
+Applications provide their source sitemap entries and let the package build the translated sitemap output:
 
 ```php
-$entries = Newtxt::renderedPageSitemapEntries('https://example.com');
+$entries = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMode' => 'path']);
 ```
 
-The package builds sitemap locations from the provided site URL, stored source path, language code, and URL mode. Query-string snapshots are excluded by default.
+The package reads target languages from NewTXT account settings or local fallback config, builds translated locations from the provided site URL, and includes locally stored rendered page snapshots. Query-string snapshots are excluded by default.
 
 ## SEO Metadata
 
@@ -214,6 +215,7 @@ use Newtxt\Laravel\Facades\Newtxt;
 $rendered = Newtxt::rememberRenderedPage('fr', '/about');
 $snippet = Newtxt::widgetSnippet();
 $stored = Newtxt::syncHashedTranslations('fr', '/about');
+$sitemap = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMode' => 'path']);
 $sitemapEntries = Newtxt::renderedPageSitemapEntries('https://example.com');
 ```
 
