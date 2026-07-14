@@ -34,7 +34,7 @@ The Composer package name is `newtxt/newtxt-translate`. Packagist package names 
 
 Public release options:
 
-- Publish the package source repository as `https://github.com/newtxt/newtxt-translate-lib`.
+- Publish the package source repository as `https://github.com/galdarturin/WidgetTranslateLaravel`.
 - Submit the repository to Packagist under the `newtxt/newtxt-translate` package name.
 - Tag stable releases in the source repository, for example `v1.0.0`, so Composer can resolve installable versions.
 - Make sure the Packagist account can publish packages under the protected `newtxt` vendor name.
@@ -49,7 +49,7 @@ Private or early-access release options:
 - Configure the customer Laravel app with a VCS repository before running `composer require`:
 
 ```bash
-composer config repositories.newtxt vcs https://github.com/newtxt/newtxt-translate-lib.git
+composer config repositories.newtxt vcs https://github.com/galdarturin/WidgetTranslateLaravel.git
 composer require newtxt/newtxt-translate
 ```
 
