@@ -19,6 +19,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
         config()->set('newtxt.api_key', 'api-site-key');
         config()->set('newtxt.account_settings_cache_ttl', 0);
         config()->set('newtxt.cache_ttl', 0);
+        config()->set('app.url', 'https://example.test');
 
         Http::fake([
             'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
@@ -39,6 +40,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 ],
                 'targetLanguages' => [
                     ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+                    ['languageCode' => 'de', 'displayName' => 'German', 'isDefault' => false],
                 ],
             ]),
             'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
@@ -51,12 +53,18 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 'fromCache' => false,
                 'cacheEnabled' => true,
                 'cachedAtUtc' => '2026-07-14T00:00:00Z',
-                'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour</main></body></html>',
+                'seoTitle' => 'Bonjour title',
+                'seoDescription' => 'Bonjour translated description',
+                'tableOfContents' => [
+                    ['title' => 'Bonjour overview'],
+                    ['title' => 'Bonjour details'],
+                ],
+                'html' => '<html><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1></main></body></html>',
             ]),
         ]);
 
         Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
-            return response('<html><head><title>Source</title></head><body><main>Source</main></body></html>', 200)
+            return response('<html><head><title>Source</title><meta name="description" content="Source description"></head><body><main><h1>Source overview</h1><h2>Source details</h2>Source</main></body></html>', 200)
                 ->header('Content-Type', 'text/html; charset=UTF-8');
         })->where('path', '.*');
 
@@ -66,13 +74,34 @@ class SeoMiddlewareIntegrationTest extends TestCase
         $this->assertStringNotContainsString('private-site-key', $widget);
         $this->assertStringNotContainsString('api-site-key', $widget);
 
+        $sourceResponse = $this->get('/about');
+
+        $sourceResponse->assertOk();
+        $sourceResponse->assertSee('Source', false);
+        $sourceResponse->assertSee('<link rel="canonical" href="https://example.test/about">', false);
+        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="en">', false);
+        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="x-default">', false);
+        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/fr/about" hreflang="fr">', false);
+        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/de/about" hreflang="de">', false);
+        $sourceResponse->assertSee('<meta property="og:title" content="Source">', false);
+        $sourceResponse->assertSee('<meta property="og:description" content="Source description">', false);
+        $sourceResponse->assertSee('<meta name="newtxt:table-of-contents" content="Source overview | Source details">', false);
+
         $response = $this->get('/fr/about?utm=campaign');
 
         $response->assertOk();
         $response->assertSee('Bonjour', false);
         $response->assertDontSee('Source', false);
         $response->assertSee('<link rel="canonical" href="https://example.test/fr/about">', false);
+        $response->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="en">', false);
+        $response->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="x-default">', false);
+        $response->assertSee('<link rel="alternate" href="https://example.test/fr/about" hreflang="fr">', false);
+        $response->assertSee('<link rel="alternate" href="https://example.test/de/about" hreflang="de">', false);
         $response->assertSee('<meta name="robots" content="index,follow">', false);
+        $response->assertSee('<title>Bonjour</title>', false);
+        $response->assertSee('<meta property="og:title" content="Bonjour">', false);
+        $response->assertSee('<meta name="description" content="Bonjour translated description">', false);
+        $response->assertSee('<meta name="newtxt:table-of-contents" content="Bonjour overview | Bonjour details">', false);
 
         Http::assertSent(function ($request) {
             $payload = json_decode($request->body(), true);

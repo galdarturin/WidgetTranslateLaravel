@@ -34,7 +34,7 @@ class ServeNewtxtTranslatedPages
             $response = $next($request);
             $this->recordSourceResponse($request, $response);
 
-            return $response;
+            return $this->applySourceSeoMetadata($request, $response);
         }
 
         $sourcePath = $this->newtxt->sourcePathForTranslatedPath($request->path(), $languageCode);
@@ -122,6 +122,36 @@ class ServeNewtxtTranslatedPages
         } catch (Throwable) {
             // Source-page snapshot failures must not break customer pages.
         }
+    }
+
+    /**
+     * Inject source-page SEO tags only into safe public HTML responses.
+     */
+    private function applySourceSeoMetadata(Request $request, Response $response): Response
+    {
+        if (!$request->isMethod('GET') || !$this->isHtmlResponse($response)) {
+            return $response;
+        }
+
+        $content = $response->getContent();
+        if (!is_string($content) || trim($content) === '') {
+            return $response;
+        }
+
+        try {
+            $html = $this->newtxt->applySourcePageSeo('/' . ltrim($request->path(), '/'), $content, [
+                'query' => $request->getQueryString() ?? '',
+            ]);
+        } catch (Throwable) {
+            return $response;
+        }
+
+        if ($html !== $content) {
+            $response->setContent($html);
+            $response->headers->remove('Content-Length');
+        }
+
+        return $response;
     }
 
     /**

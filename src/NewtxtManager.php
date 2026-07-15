@@ -211,7 +211,7 @@ class NewtxtManager
         $sourceLanguage = $this->sourceLanguage();
         $path = $this->normalizePath($path);
         $urlMode = (string) ($options['urlMode'] ?? $this->urlMode());
-        $version = (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v1');
+        $version = (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v2');
         $snapshot = [
             'siteId' => $siteId,
             'languageCode' => $sourceLanguage,
@@ -230,6 +230,18 @@ class NewtxtManager
         unset($snapshot['html']);
 
         return $snapshot;
+    }
+
+    /**
+     * Apply canonical and hreflang metadata to a public source-language page.
+     */
+    public function applySourcePageSeo(string $path, string $html, array $options = []): string
+    {
+        if (!$this->canServeTranslatedPages() || !$this->injectSeoMetadata() || trim($html) === '') {
+            return $html;
+        }
+
+        return $this->seo->apply($html, $this->sourcePageSeoMetadata($path, $options));
     }
 
     /**
@@ -474,7 +486,7 @@ class NewtxtManager
         $html = $rendered['html'];
 
         if ($this->injectSeoMetadata()) {
-            $html = $this->seo->apply($html, $this->seoMetadataForRenderedPage($rendered, $options));
+            $html = $this->seo->apply($html, $this->seoMetadataForRenderedPage($rendered, $languageCode, $path, $options));
             $rendered['html'] = $html;
         }
 
@@ -500,27 +512,209 @@ class NewtxtManager
     /**
      * Build SEO metadata for a translated HTML document.
      */
-    private function seoMetadataForRenderedPage(array $rendered, array $options): array
+    private function seoMetadataForRenderedPage(array $rendered, string $languageCode, string $path, array $options): array
     {
+        $urlMode = $this->normalizeUrlMode($options['urlMode'] ?? $rendered['urlMode'] ?? $this->urlMode()) ?? 'path';
+        $canonicalUrl = $this->safeHttpUrl($rendered['translatedUrl'] ?? null)
+            ?? $this->localizedPageUrl($path, $languageCode, $urlMode, $options);
+
         $metadata = [
-            'canonicalUrl' => $rendered['translatedUrl'] ?? null,
+            'canonicalUrl' => $canonicalUrl,
             'robots' => $this->seoRobots(),
+            'alternates' => $this->pageAlternates($path, $languageCode, $urlMode, $options, $rendered),
         ];
 
-        if (isset($rendered['linkTags']) && is_array($rendered['linkTags'])) {
-            $metadata['alternates'] = collect($rendered['linkTags'])
-                ->filter(fn ($tag) => is_array($tag))
-                ->map(fn ($tag) => [
-                    'href' => $tag['href'] ?? null,
-                    'hreflang' => $tag['hrefLang'] ?? $tag['hreflang'] ?? null,
-                ])
-                ->values()
-                ->all();
+        $title = $this->firstMetadataValue($rendered, [
+            'title',
+            'pageTitle',
+            'seoTitle',
+            'metaTitle',
+            'metadata.title',
+            'metadata.seoTitle',
+            'seo.title',
+            'seo.metaTitle',
+        ]);
+        if ($title !== null) {
+            $metadata['title'] = $title;
+        }
+
+        $description = $this->firstMetadataValue($rendered, [
+            'description',
+            'pageDescription',
+            'seoDescription',
+            'metaDescription',
+            'summary',
+            'metadata.description',
+            'metadata.seoDescription',
+            'seo.description',
+            'seo.metaDescription',
+        ]);
+        if ($description !== null) {
+            $metadata['description'] = $description;
+        }
+
+        $tableOfContents = $this->firstMetadataValue($rendered, [
+            'tableOfContents',
+            'toc',
+            'contents',
+            'pageContents',
+            'metadata.tableOfContents',
+            'metadata.toc',
+            'seo.tableOfContents',
+            'seo.toc',
+        ]);
+        if ($tableOfContents !== null) {
+            $metadata['tableOfContents'] = $tableOfContents;
         }
 
         $customMetadata = is_array($options['seo'] ?? null) ? $options['seo'] : [];
 
         return array_merge($metadata, $customMetadata);
+    }
+
+    /**
+     * Build SEO metadata for the source-language page returned by Laravel.
+     */
+    private function sourcePageSeoMetadata(string $path, array $options): array
+    {
+        $urlMode = $this->normalizeUrlMode($options['urlMode'] ?? $this->urlMode()) ?? 'path';
+        $metadata = [
+            'canonicalUrl' => $this->sourcePageUrl($path, $options),
+            'robots' => $this->seoRobots(),
+            'alternates' => $this->pageAlternates($path, null, $urlMode, $options),
+        ];
+        $customMetadata = is_array($options['seo'] ?? null) ? $options['seo'] : [];
+
+        return array_merge($metadata, $customMetadata);
+    }
+
+    /**
+     * Build the complete hreflang set for source and translated page variants.
+     */
+    private function pageAlternates(string $path, ?string $languageCode, string $urlMode, array $options = [], array $rendered = []): array
+    {
+        $sourceUrl = $this->safeHttpUrl($rendered['originalUrl'] ?? $rendered['sourceUrl'] ?? null)
+            ?? $this->sourcePageUrl($path, $options);
+        $sourceLanguage = $this->sourceLanguage();
+        $generated = [];
+
+        if ($sourceUrl !== null) {
+            $generated[] = [
+                'href' => $sourceUrl,
+                'hreflang' => $sourceLanguage,
+            ];
+            $generated[] = [
+                'href' => $sourceUrl,
+                'hreflang' => 'x-default',
+            ];
+        }
+
+        $languages = array_values(array_unique(array_filter(array_merge(
+            $this->targetLanguages(),
+            $languageCode !== null ? [$this->normalizeLanguageCode($languageCode)] : [],
+        ))));
+
+        foreach ($languages as $targetLanguage) {
+            if ($targetLanguage === $sourceLanguage) {
+                continue;
+            }
+
+            $href = $languageCode !== null && $targetLanguage === $languageCode
+                ? $this->safeHttpUrl($rendered['translatedUrl'] ?? null)
+                : null;
+
+            $href ??= $this->localizedPageUrl($path, $targetLanguage, $urlMode, $options);
+            if ($href === null) {
+                continue;
+            }
+
+            $generated[] = [
+                'href' => $href,
+                'hreflang' => $targetLanguage,
+            ];
+        }
+
+        return $this->mergeAlternates($generated, $this->renderedAlternates($rendered));
+    }
+
+    /**
+     * Read alternate links from common render API payload shapes.
+     */
+    private function renderedAlternates(array $rendered): array
+    {
+        $alternates = [];
+        foreach (['linkTags', 'alternates', 'alternateLinks', 'hreflangs', 'hreflang'] as $key) {
+            $items = Arr::get($rendered, $key);
+            if (!is_array($items)) {
+                continue;
+            }
+
+            foreach ($items as $language => $item) {
+                if (is_array($item)) {
+                    $alternates[] = [
+                        'href' => $item['href'] ?? $item['url'] ?? null,
+                        'hreflang' => $item['hreflang'] ?? $item['hrefLang'] ?? (is_string($language) ? $language : null),
+                    ];
+                    continue;
+                }
+
+                $alternates[] = [
+                    'href' => $item,
+                    'hreflang' => is_string($language) ? $language : null,
+                ];
+            }
+        }
+
+        return $alternates;
+    }
+
+    /**
+     * Merge alternates by hreflang while keeping later API values authoritative.
+     */
+    private function mergeAlternates(array ...$groups): array
+    {
+        $merged = [];
+        foreach ($groups as $group) {
+            foreach ($group as $alternate) {
+                if (!is_array($alternate)) {
+                    continue;
+                }
+
+                $href = $this->safeHttpUrl($alternate['href'] ?? null);
+                $hreflang = strtolower(trim((string) ($alternate['hreflang'] ?? $alternate['hrefLang'] ?? '')));
+                if ($href === null || $hreflang === '') {
+                    continue;
+                }
+
+                $merged[$hreflang] = [
+                    'href' => $href,
+                    'hreflang' => $hreflang,
+                ];
+            }
+        }
+
+        return array_values($merged);
+    }
+
+    /**
+     * Return the first non-empty SEO value from the render payload.
+     */
+    private function firstMetadataValue(array $rendered, array $keys): mixed
+    {
+        foreach ($keys as $key) {
+            $value = Arr::get($rendered, $key);
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            if (is_array($value) && $value === []) {
+                continue;
+            }
+
+            return $value;
+        }
+
+        return null;
     }
 
     /**
@@ -587,7 +781,7 @@ class NewtxtManager
      */
     private function pageHashVersion(): string
     {
-        return (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v1');
+        return (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v2');
     }
 
     /**
@@ -850,6 +1044,26 @@ class NewtxtManager
         return $query !== '' ? "{$url}?{$query}" : $url;
     }
 
+    private function sourcePageUrl(string $path, array $options = []): ?string
+    {
+        $siteUrl = $this->normalizeSitemapSiteUrl($options['siteUrl'] ?? $this->config->get('app.url'));
+        if ($siteUrl === null) {
+            return null;
+        }
+
+        return rtrim($siteUrl, '/') . $this->normalizePath($path);
+    }
+
+    private function localizedPageUrl(string $path, string $languageCode, string $urlMode, array $options = []): ?string
+    {
+        $siteUrl = $this->normalizeSitemapSiteUrl($options['siteUrl'] ?? $this->config->get('app.url'));
+        if ($siteUrl === null) {
+            return null;
+        }
+
+        return $this->localizedSitemapUrl($siteUrl, $path, $languageCode, $urlMode);
+    }
+
     private function localizedPath(string $path, string $languageCode): string
     {
         $path = $this->normalizePath($path);
@@ -935,6 +1149,29 @@ class NewtxtManager
     private function hasUnsafeUrlPart(string $value): bool
     {
         return preg_match('/[\r\n#]/', $value) === 1;
+    }
+
+    /**
+     * Accept only absolute HTTP(S) URLs for generated SEO metadata.
+     */
+    private function safeHttpUrl(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+
+        $scheme = parse_url($value, PHP_URL_SCHEME);
+        if (!in_array(strtolower((string) $scheme), ['http', 'https'], true)) {
+            return null;
+        }
+
+        $host = parse_url($value, PHP_URL_HOST);
+        if (!is_string($host) || trim($host) === '') {
+            return null;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_URL) ? $value : null;
     }
 
     /**

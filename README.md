@@ -13,7 +13,7 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 - Store API-rendered translated HTML in the configured Laravel cache store.
 - Store API-provided source-text hash translations under the project storage directory.
 - Store rendered page hashes and optional HTML snapshots for deterministic local invalidation.
-- Inject canonical, robots, Open Graph, and Twitter URL metadata into rendered translated HTML.
+- Inject canonical, hreflang, robots, Open Graph, Twitter, description, and table-of-contents metadata into public source and rendered translated HTML.
 - Offer optional Artisan tools for local cache hydration and translation artifact sync.
 - Read public sitemap URLs only when they already exist and are useful for local prewarm.
 - Build translated sitemap entries from application-provided source sitemap entries without requiring a custom sitemap implementation.
@@ -172,7 +172,9 @@ storage/app/newtxt/pages/{siteId}/{languageCode}/indexes/{lookupHash}.json
 
 `pageHash` includes the package hash version, site ID, language, URL mode, source path, and normalized HTML hash. `lookupHash` includes the site ID, language, URL mode, source path, query string, and page hash version so translated requests can be served from local storage immediately after prewarm. Bump `page_hash_version` in the published package config when the application needs to invalidate old page artifacts after a rendering policy change.
 
-For source pages, the middleware can record the final Laravel HTML response hash when `store_source_page_hashes` is enabled in the published package config. Full source HTML is stored only when `store_source_html` is enabled.
+For source pages, the middleware can record the Laravel-rendered source HTML response hash when `store_source_page_hashes` is enabled in the published package config. This snapshot is captured before the local SEO pass so generated head tags do not become translation source content. Full source HTML is stored only when `store_source_html` is enabled.
+
+The default `page_hash_version` is `newtxt-laravel-v2` because the local SEO pass now writes a complete canonical and hreflang set plus page metadata. Applications with a published config should bump this value when deploying the updated package if old local snapshots must be invalidated immediately.
 
 Applications provide their source sitemap entries and let the package build the translated sitemap output:
 
@@ -184,15 +186,19 @@ The package reads target languages from NewTXT account settings or local fallbac
 
 ## SEO Metadata
 
-When local SEO metadata injection is enabled in the package config or account settings, rendered translated HTML receives a local SEO pass before it is cached or written to storage. The pass upserts:
+When local SEO metadata injection is enabled in the package config or account settings, public source HTML and rendered translated HTML receive a local SEO pass. Translated HTML is processed before it is cached or written to storage. The pass preserves native page metadata and adds only missing tags:
 
 - `<link rel="canonical">`
+- `<link rel="alternate" hreflang="...">` for the source page, every configured target language, and `x-default`
+- `<title>` from supplied page title metadata or page headings when missing
+- `<meta name="description">`
 - `<meta property="og:url">`
 - `<meta name="twitter:url">`
 - `<meta name="robots">`
-- optional description, Open Graph, and Twitter title/description values supplied through `renderPage(..., ['seo' => [...]] )`
+- Open Graph and Twitter title/description values
+- `<meta name="newtxt:table-of-contents">` from supplied table-of-contents metadata or page headings
 
-Only absolute `http` and `https` URLs are accepted for SEO URL tags.
+For translated pages, the canonical URL comes from the NewTXT render response when available and falls back to the configured URL mode. For source pages, the canonical URL comes from `app.url` plus the source path. Only absolute `http` and `https` URLs are accepted for SEO URL tags.
 
 ## Signed Service Callback
 
