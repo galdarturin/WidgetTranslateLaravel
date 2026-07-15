@@ -11,6 +11,7 @@ use Newtxt\Laravel\Html\PageHasher;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Storage\HashedTranslationStore;
 use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
+use Newtxt\Laravel\Support\ConfigCredential;
 use Throwable;
 
 class NewtxtManager
@@ -61,11 +62,7 @@ class NewtxtManager
      */
     public function renderPage(string $languageCode, string $path, array $options = []): ?array
     {
-        if (!$this->enabled()) {
-            return null;
-        }
-
-        if ($this->publicKey() === '') {
+        if (!$this->canRenderTranslatedPages()) {
             return null;
         }
 
@@ -146,7 +143,7 @@ class NewtxtManager
      */
     public function syncHashedTranslations(string $languageCode, string $path, array $options = []): int
     {
-        if (!$this->enabled()) {
+        if (!$this->canRenderTranslatedPages()) {
             return 0;
         }
 
@@ -399,9 +396,16 @@ class NewtxtManager
     public function canServeTranslatedPages(): bool
     {
         return $this->enabled()
-            && $this->hasServerCredentials()
             && $this->translationMode() === 'seo'
             && $this->targetLanguages() !== [];
+    }
+
+    /**
+     * Return true when translated HTML can be fetched from the NewTXT API.
+     */
+    public function canRenderTranslatedPages(): bool
+    {
+        return $this->canServeTranslatedPages() && $this->hasServerCredentials();
     }
 
     /**
@@ -842,17 +846,17 @@ class NewtxtManager
      */
     private function publicKey(): string
     {
-        return trim((string) $this->config->get('newtxt.public_key', ''));
+        return ConfigCredential::value($this->config->get('newtxt.public_key', ''));
     }
 
     private function apiKey(): string
     {
-        return trim((string) $this->config->get('newtxt.api_key', ''));
+        return ConfigCredential::value($this->config->get('newtxt.api_key', ''));
     }
 
     private function privateKey(): string
     {
-        return trim((string) $this->config->get('newtxt.private_key', ''));
+        return ConfigCredential::value($this->config->get('newtxt.private_key', ''));
     }
 
     /**

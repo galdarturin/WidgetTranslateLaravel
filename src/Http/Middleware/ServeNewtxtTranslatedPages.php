@@ -137,7 +137,7 @@ class ServeNewtxtTranslatedPages
      */
     private function shouldAttemptTranslation(Request $request): bool
     {
-        if (!$this->newtxt->canServeTranslatedPages()) {
+        if (!$this->newtxt->canRenderTranslatedPages()) {
             return false;
         }
 

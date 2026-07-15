@@ -18,8 +18,8 @@ class SeoMiddlewareIntegrationTest extends TestCase
     public function test_seo_middleware_is_transparent_without_server_credentials(): void
     {
         config()->set('newtxt.public_key', 'public-site-key');
-        config()->set('newtxt.private_key', '');
-        config()->set('newtxt.api_key', '');
+        config()->set('newtxt.private_key', 'placeholder-private-key');
+        config()->set('newtxt.api_key', 'replace-with-dashboard-api-key');
         config()->set('newtxt.target_languages', 'fr');
         config()->set('newtxt.account_settings_cache_ttl', 0);
         config()->set('app.url', 'https://example.test');
@@ -37,6 +37,34 @@ class SeoMiddlewareIntegrationTest extends TestCase
         $response->assertHeaderMissing('X-NewTXT-Cache');
         $response->assertSee('Source only', false);
         $response->assertDontSee('<link rel="canonical"', false);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_sitemap_entries_use_local_languages_without_server_credentials(): void
+    {
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'placeholder-private-key');
+        config()->set('newtxt.api_key', 'replace-with-dashboard-api-key');
+        config()->set('newtxt.target_languages', 'fr,de');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+
+        Http::fake();
+
+        $entries = app(NewtxtManager::class)->sitemapEntries([
+            [
+                'loc' => 'https://example.test/about',
+                'lastmod' => '2026-07-15T00:00:00+00:00',
+                'changefreq' => 'weekly',
+                'priority' => '0.7',
+            ],
+        ], 'https://example.test', ['urlMode' => 'path']);
+
+        $locations = array_column($entries, 'loc');
+
+        $this->assertContains('https://example.test/about', $locations);
+        $this->assertContains('https://example.test/fr/about', $locations);
+        $this->assertContains('https://example.test/de/about', $locations);
 
         Http::assertNothingSent();
     }

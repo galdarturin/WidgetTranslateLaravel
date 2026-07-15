@@ -4,17 +4,30 @@ namespace Newtxt\Laravel;
 
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\PendingRequest;
+use Newtxt\Laravel\Support\ConfigCredential;
 
 class NewtxtClient
 {
     private const ApiBaseUrl = 'https://api-v1.newtxt.io/api/v1';
 
+    private readonly HttpFactory $http;
+
+    private readonly string $apiKey;
+
+    private readonly string $publicKey;
+
+    private readonly string $privateKey;
+
     public function __construct(
-        private readonly HttpFactory $http,
-        private readonly string $apiKey,
-        private readonly string $publicKey,
-        private readonly string $privateKey,
+        HttpFactory $http,
+        string $apiKey,
+        string $publicKey,
+        string $privateKey,
     ) {
+        $this->http = $http;
+        $this->apiKey = ConfigCredential::value($apiKey);
+        $this->publicKey = ConfigCredential::value($publicKey);
+        $this->privateKey = ConfigCredential::value($privateKey);
     }
 
     /**

@@ -91,6 +91,8 @@ NEWTXT_CALLBACK_ENABLED=false
 
 `NEWTXT_PUBLIC_KEY` is safe to render into the widget script tag. `NEWTXT_API_KEY`, `NEWTXT_PRIVATE_KEY`, and `NEWTXT_CALLBACK_SECRET` are server-only. The API key is sent only on signed server-side integration requests. The private key signs those requests and is never sent as a header value. Do not render server-only keys into Blade, JavaScript, logs, or cached HTML.
 
+Template values such as `placeholder-*` or `replace-with-*` are treated as unset by the package. Applications should not add their own credential sanitizers around NewTXT config values.
+
 Source language, target languages, URL mode, widget rendering mode, SEO mode, and translated-page cache policy are read from the customer's NewTXT account. Do not duplicate those values in application `.env` files.
 
 ## Route Middleware

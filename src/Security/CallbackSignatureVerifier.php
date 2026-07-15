@@ -4,6 +4,7 @@ namespace Newtxt\Laravel\Security;
 
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Http\Request;
+use Newtxt\Laravel\Support\ConfigCredential;
 
 class CallbackSignatureVerifier
 {
@@ -19,7 +20,7 @@ class CallbackSignatureVerifier
      */
     public function verify(Request $request): bool
     {
-        $secret = trim((string) $this->config->get('newtxt.callback_secret', ''));
+        $secret = ConfigCredential::value($this->config->get('newtxt.callback_secret', ''));
         if ($secret === '') {
             return false;
         }

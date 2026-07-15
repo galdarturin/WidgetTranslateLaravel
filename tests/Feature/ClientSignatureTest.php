@@ -8,6 +8,29 @@ use Newtxt\Laravel\Tests\TestCase;
 
 class ClientSignatureTest extends TestCase
 {
+    public function test_client_ignores_placeholder_credentials_from_env_templates(): void
+    {
+        config()->set('newtxt.public_key', 'replace-with-dashboard-public-key');
+        config()->set('newtxt.private_key', 'placeholder-private-key');
+        config()->set('newtxt.api_key', 'replace-with-dashboard-api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
+                'html' => '<html><body>Bonjour</body></html>',
+            ]),
+        ]);
+
+        app(NewtxtClient::class)->renderPage('fr', '/about', ['urlMode' => 'path']);
+
+        Http::assertSent(function ($request) {
+            return $request->method() === 'POST'
+                && !$request->hasHeader('X-NewTXT-Api-Key')
+                && !$request->hasHeader('X-NewTXT-Public-Key')
+                && !$request->hasHeader('X-NewTXT-Signature')
+                && !$request->hasHeader('X-NewTXT-Private-Key');
+        });
+    }
+
     public function test_client_signs_the_exact_post_body_sent_to_laravel_integration_api(): void
     {
         config()->set('newtxt.public_key', 'public-key');

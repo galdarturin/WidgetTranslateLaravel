@@ -37,6 +37,27 @@ class CallbackSignatureVerifierTest extends TestCase
         $this->assertFalse($verifier->verify($request));
     }
 
+    public function test_it_rejects_placeholder_callback_secrets(): void
+    {
+        $body = json_encode(['action' => 'health.check'], JSON_THROW_ON_ERROR);
+        $timestamp = (string) time();
+        $signature = hash_hmac('sha256', $timestamp . '.' . $body, 'placeholder-private-key');
+        $request = Request::create('/newtxt/callback', 'POST', [], [], [], [], $body);
+        $request->headers->set('X-NewTXT-Timestamp', $timestamp);
+        $request->headers->set('X-NewTXT-Signature', $signature);
+
+        $verifier = new CallbackSignatureVerifier(new ConfigRepository([
+            'newtxt' => [
+                'callback_secret' => 'placeholder-private-key',
+                'callback_timestamp_header' => 'X-NewTXT-Timestamp',
+                'callback_signature_header' => 'X-NewTXT-Signature',
+                'callback_tolerance_seconds' => 300,
+            ],
+        ]));
+
+        $this->assertFalse($verifier->verify($request));
+    }
+
     private function config(): ConfigRepository
     {
         return new ConfigRepository([
