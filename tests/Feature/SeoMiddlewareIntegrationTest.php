@@ -15,6 +15,32 @@ use Symfony\Component\HttpFoundation\Response;
 
 class SeoMiddlewareIntegrationTest extends TestCase
 {
+    public function test_seo_middleware_is_transparent_without_server_credentials(): void
+    {
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', '');
+        config()->set('newtxt.api_key', '');
+        config()->set('newtxt.target_languages', 'fr');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('app.url', 'https://example.test');
+
+        Http::fake();
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source</title></head><body><main>Source only</main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        $response = $this->get('/fr/about');
+
+        $response->assertOk();
+        $response->assertHeaderMissing('X-NewTXT-Cache');
+        $response->assertSee('Source only', false);
+        $response->assertDontSee('<link rel="canonical"', false);
+
+        Http::assertNothingSent();
+    }
+
     public function test_env_config_widget_directive_and_seo_middleware_work_together(): void
     {
         config()->set('newtxt.public_key', 'public-site-key');

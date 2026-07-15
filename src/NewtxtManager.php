@@ -398,7 +398,10 @@ class NewtxtManager
      */
     public function canServeTranslatedPages(): bool
     {
-        return $this->enabled() && $this->translationMode() === 'seo';
+        return $this->enabled()
+            && $this->hasServerCredentials()
+            && $this->translationMode() === 'seo'
+            && $this->targetLanguages() !== [];
     }
 
     /**
@@ -615,6 +618,14 @@ class NewtxtManager
         $customMetadata = is_array($options['seo'] ?? null) ? $options['seo'] : [];
 
         return array_merge($metadata, $customMetadata);
+    }
+
+    /**
+     * Return true when server-to-server requests can be authenticated.
+     */
+    private function hasServerCredentials(): bool
+    {
+        return $this->publicKey() !== '' && $this->apiKey() !== '' && $this->privateKey() !== '';
     }
 
     /**
