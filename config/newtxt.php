@@ -99,6 +99,7 @@ return [
     'store_rendered_html' => true,
     'store_source_page_hashes' => true,
     'store_source_html' => false,
+    'sync_hashed_translations_on_render' => true,
     'sync_hashed_translations_on_prewarm' => true,
     'page_hash_version' => 'newtxt-laravel-v2',
 

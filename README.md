@@ -172,6 +172,12 @@ Normal customer installations should populate this store from NewTXT API
 responses through `newtxt:prewarm`, `newtxt:translations-sync`, middleware
 rendering, or signed service callbacks.
 
+When `sync_hashed_translations_on_render` is enabled, every successful remote
+translated page render also performs a best-effort node sync into this store.
+If the sync endpoint is unavailable, the translated HTML response still succeeds
+and the artifact sync can be retried later with `newtxt:translations-sync` or
+`newtxt:prewarm`.
+
 ## Rendered Page Snapshots
 
 Translated renders are hashed after the local SEO pass. The package writes metadata and optional HTML snapshots under:

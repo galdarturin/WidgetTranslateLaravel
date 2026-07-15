@@ -506,7 +506,36 @@ class NewtxtManager
             ]), (bool) $this->config->get('newtxt.store_rendered_html', true));
         }
 
+        $this->syncRenderedPageTranslations($languageCode, $path, $urlMode, $options);
+
         return $rendered;
+    }
+
+    /**
+     * Store node translations after a successful remote render.
+     *
+     * Local artifact sync is best-effort because translated page rendering must
+     * remain available when the translation-memory endpoint is temporarily
+     * unavailable.
+     */
+    private function syncRenderedPageTranslations(string $languageCode, string $path, string $urlMode, array $options): void
+    {
+        if (
+            !(bool) $this->config->get('newtxt.store_hashed_translations', true)
+            || !(bool) $this->config->get('newtxt.sync_hashed_translations_on_render', true)
+        ) {
+            return;
+        }
+
+        try {
+            $this->syncHashedTranslations($languageCode, $path, array_merge($options, [
+                'urlMode' => $urlMode,
+                'includeHtml' => false,
+                'autoTranslateIfMissing' => false,
+            ]));
+        } catch (Throwable) {
+            // Translation-memory sync must not break public page rendering.
+        }
     }
 
     /**

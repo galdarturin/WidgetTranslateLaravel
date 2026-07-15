@@ -208,6 +208,9 @@ class SeoMiddlewareIntegrationTest extends TestCase
 
     public function test_rewritten_language_attributes_serve_translated_html_from_source_path(): void
     {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-rewritten-' . bin2hex(random_bytes(6));
+
+        config()->set('newtxt.storage_path', $storagePath);
         config()->set('newtxt.public_key', 'public-site-key');
         config()->set('newtxt.private_key', 'private-site-key');
         config()->set('newtxt.api_key', 'api-site-key');
@@ -235,29 +238,55 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 'fromCache' => false,
                 'html' => '<html><head><title>Bonjour rewritten</title></head><body><main>Bonjour rewritten page</main></body></html>',
             ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/translations*' => Http::response([
+                'path' => '/about',
+                'urlMode' => 'path',
+                'translatedUrl' => 'https://example.test/fr/about',
+                'nodes' => [
+                    [
+                        'nodeKey' => 'main-title',
+                        'nodeType' => 'text',
+                        'sourceText' => 'Source rewritten page',
+                        'translatedText' => 'Bonjour rewritten page',
+                    ],
+                ],
+            ]),
         ]);
 
-        Route::middleware(['web', RewritesLanguagePrefixForNewtxtTest::class, 'newtxt.render'])->get('/{path?}', function () {
-            return response('<html><head><title>Source rewritten</title></head><body><main>Source rewritten page</main></body></html>', 200)
-                ->header('Content-Type', 'text/html; charset=UTF-8');
-        })->where('path', '.*');
+        try {
+            Route::middleware(['web', RewritesLanguagePrefixForNewtxtTest::class, 'newtxt.render'])->get('/{path?}', function () {
+                return response('<html><head><title>Source rewritten</title></head><body><main>Source rewritten page</main></body></html>', 200)
+                    ->header('Content-Type', 'text/html; charset=UTF-8');
+            })->where('path', '.*');
 
-        $response = $this->get('/fr/about');
+            $response = $this->get('/fr/about');
 
-        $response->assertOk();
-        $response->assertHeader('X-NewTXT-Cache', 'remote-miss');
-        $response->assertSee('Bonjour rewritten page', false);
-        $response->assertDontSee('Source rewritten page', false);
+            $response->assertOk();
+            $response->assertHeader('X-NewTXT-Cache', 'remote-miss');
+            $response->assertSee('Bonjour rewritten page', false);
+            $response->assertDontSee('Source rewritten page', false);
 
-        Http::assertSent(function ($request) {
-            $payload = json_decode($request->body(), true);
+            Http::assertSent(function ($request) {
+                $payload = json_decode($request->body(), true);
 
-            return $request->method() === 'POST'
-                && str_contains((string) $request->url(), '/integrations/laravel/pages/render')
-                && is_array($payload)
-                && $payload['languageCode'] === 'fr'
-                && $payload['path'] === '/about';
-        });
+                return $request->method() === 'POST'
+                    && str_contains((string) $request->url(), '/integrations/laravel/pages/render')
+                    && is_array($payload)
+                    && $payload['languageCode'] === 'fr'
+                    && $payload['path'] === '/about';
+            });
+
+            $files = (new Filesystem())->glob($storagePath . '/translations/00000000-0000-0000-0000-000000000030/fr/*.json');
+            $this->assertCount(1, $files);
+
+            $stored = json_decode((new Filesystem())->get($files[0]), true);
+            $this->assertSame('Source rewritten page', $stored['sourceText'] ?? null);
+            $this->assertSame('Bonjour rewritten page', $stored['translatedText'] ?? null);
+            $this->assertNotEmpty($stored['sourceHash'] ?? null);
+            $this->assertNotEmpty($stored['translationHash'] ?? null);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
     }
 
     public function test_rendered_page_sitemap_entries_include_stored_translated_snapshots(): void
