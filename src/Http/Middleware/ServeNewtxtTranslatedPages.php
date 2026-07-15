@@ -29,15 +29,15 @@ class ServeNewtxtTranslatedPages
             return $next($request);
         }
 
-        $languageCode = $this->newtxt->extractLanguageFromPath($request->path());
-        if ($languageCode === null) {
+        $translationContext = $this->translatedRequestContext($request);
+        if ($translationContext === null) {
             $response = $next($request);
             $this->recordSourceResponse($request, $response);
 
             return $this->applySourceSeoMetadata($request, $response);
         }
 
-        $sourcePath = $this->newtxt->sourcePathForTranslatedPath($request->path(), $languageCode);
+        [$languageCode, $sourcePath] = $translationContext;
         $rendered = $this->newtxt->rememberRenderedPage($languageCode, $sourcePath, [
             'query' => $request->getQueryString() ?? '',
         ]);
@@ -57,6 +57,67 @@ class ServeNewtxtTranslatedPages
         }
 
         return $response;
+    }
+
+    /**
+     * Resolve translated request language and source path.
+     *
+     * Some host applications rewrite localized paths before route middleware
+     * runs. In that case, trusted request attributes can carry the language
+     * while the current request path already points at the source page.
+     *
+     * @return array{0:string,1:string}|null
+     */
+    private function translatedRequestContext(Request $request): ?array
+    {
+        $attributeLanguage = $this->languageFromRequestAttributes($request);
+        if ($attributeLanguage !== null) {
+            return [$attributeLanguage, '/' . ltrim($request->path(), '/')];
+        }
+
+        $languageCode = $this->newtxt->extractLanguageFromPath($request->path());
+        if ($languageCode === null) {
+            return null;
+        }
+
+        return [
+            $languageCode,
+            $this->newtxt->sourcePathForTranslatedPath($request->path(), $languageCode),
+        ];
+    }
+
+    /**
+     * Read a route-safe language code from configured request attributes.
+     */
+    private function languageFromRequestAttributes(Request $request): ?string
+    {
+        $targetLanguages = $this->newtxt->targetLanguages();
+        if ($targetLanguages === []) {
+            return null;
+        }
+
+        foreach ((array) config('newtxt.request_language_attributes', []) as $attribute) {
+            $attribute = trim((string) $attribute);
+            if ($attribute === '') {
+                continue;
+            }
+
+            $candidate = $request->attributes->get($attribute);
+            if (!is_scalar($candidate)) {
+                continue;
+            }
+
+            $languageCode = strtolower(str_replace('_', '-', trim((string) $candidate)));
+            if (preg_match('/^[a-z0-9][a-z0-9_-]{1,19}$/', $languageCode) !== 1) {
+                continue;
+            }
+
+            if (in_array($languageCode, $targetLanguages, true)) {
+                return $languageCode;
+            }
+        }
+
+        return null;
     }
 
     /**

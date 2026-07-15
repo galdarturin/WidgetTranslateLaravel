@@ -2,13 +2,16 @@
 
 namespace Newtxt\Laravel\Tests\Feature;
 
+use Closure;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Newtxt\Laravel\NewtxtManager;
 use Newtxt\Laravel\Tests\TestCase;
+use Symfony\Component\HttpFoundation\Response;
 
 class SeoMiddlewareIntegrationTest extends TestCase
 {
@@ -203,6 +206,60 @@ class SeoMiddlewareIntegrationTest extends TestCase
         }
     }
 
+    public function test_rewritten_language_attributes_serve_translated_html_from_source_path(): void
+    {
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 0);
+        config()->set('app.url', 'https://example.test');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000030',
+                'publicKey' => 'public-site-key',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'translationMode' => 'seo',
+                'targetLanguages' => [
+                    ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+                ],
+            ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000030',
+                'languageCode' => 'fr',
+                'path' => '/about',
+                'urlMode' => 'path',
+                'translatedUrl' => 'https://example.test/fr/about',
+                'fromCache' => false,
+                'html' => '<html><head><title>Bonjour rewritten</title></head><body><main>Bonjour rewritten page</main></body></html>',
+            ]),
+        ]);
+
+        Route::middleware(['web', RewritesLanguagePrefixForNewtxtTest::class, 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source rewritten</title></head><body><main>Source rewritten page</main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        $response = $this->get('/fr/about');
+
+        $response->assertOk();
+        $response->assertHeader('X-NewTXT-Cache', 'remote-miss');
+        $response->assertSee('Bonjour rewritten page', false);
+        $response->assertDontSee('Source rewritten page', false);
+
+        Http::assertSent(function ($request) {
+            $payload = json_decode($request->body(), true);
+
+            return $request->method() === 'POST'
+                && str_contains((string) $request->url(), '/integrations/laravel/pages/render')
+                && is_array($payload)
+                && $payload['languageCode'] === 'fr'
+                && $payload['path'] === '/about';
+        });
+    }
+
     public function test_rendered_page_sitemap_entries_include_stored_translated_snapshots(): void
     {
         $storagePath = sys_get_temp_dir() . '/newtxt-laravel-sitemap-' . bin2hex(random_bytes(6));
@@ -274,5 +331,27 @@ class SeoMiddlewareIntegrationTest extends TestCase
         } finally {
             (new Filesystem())->deleteDirectory($storagePath);
         }
+    }
+}
+
+class RewritesLanguagePrefixForNewtxtTest
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $segments = array_values(array_filter(explode('/', trim($request->getPathInfo(), '/'))));
+        $languageCode = strtolower((string) ($segments[0] ?? ''));
+        if ($languageCode !== 'fr') {
+            return $next($request);
+        }
+
+        $sourcePath = '/' . implode('/', array_slice($segments, 1));
+        $server = $request->server->all();
+        $server['REQUEST_URI'] = $sourcePath;
+        $server['PATH_INFO'] = $sourcePath;
+
+        $localizedRequest = $request->duplicate(server: $server);
+        $localizedRequest->attributes->set('widget_language_prefix', $languageCode);
+
+        return $next($localizedRequest);
     }
 }

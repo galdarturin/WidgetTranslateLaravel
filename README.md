@@ -106,6 +106,18 @@ Route::middleware(['web', 'newtxt.render'])->group(function () {
 
 Do not attach it to admin, auth, account, checkout, billing, API, or webhook routes.
 
+If the host application rewrites localized routes before route middleware runs,
+the middleware can read the language from configured request attributes while
+using the current request path as the source path. The default allow-list is:
+
+```php
+'request_language_attributes' => [
+    'newtxt_language_code',
+    'widget_language_prefix',
+    'widget_language_subdomain',
+],
+```
+
 ## Widget Rendering
 
 Render the switcher from the Laravel layout:

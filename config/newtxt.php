@@ -64,6 +64,11 @@ return [
     'widget_container_id' => 'language-widget-slot',
     'navigation_mode' => 'redirect',
     'url_mode' => 'path',
+    'request_language_attributes' => [
+        'newtxt_language_code',
+        'widget_language_prefix',
+        'widget_language_subdomain',
+    ],
 
     /*
     |--------------------------------------------------------------------------
