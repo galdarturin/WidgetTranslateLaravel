@@ -15,7 +15,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class SeoMiddlewareIntegrationTest extends TestCase
 {
-    public function test_seo_middleware_is_transparent_without_server_credentials(): void
+    public function test_seo_middleware_noindexes_translated_fallback_without_server_credentials(): void
     {
         config()->set('newtxt.public_key', 'public-site-key');
         config()->set('newtxt.private_key', 'placeholder-private-key');
@@ -35,13 +35,43 @@ class SeoMiddlewareIntegrationTest extends TestCase
 
         $response->assertOk();
         $response->assertHeaderMissing('X-NewTXT-Cache');
+        $response->assertHeader('X-NewTXT-Translation-Status', 'incomplete');
+        $response->assertHeader('X-Robots-Tag', 'noindex, follow');
         $response->assertSee('Source only', false);
-        $response->assertDontSee('<link rel="canonical"', false);
+        $response->assertSee('<link rel="canonical" href="https://example.test/fr/about">', false);
+        $response->assertSee('<meta name="robots" content="noindex,follow">', false);
+        $response->assertDontSee('hreflang=', false);
 
         Http::assertNothingSent();
     }
 
-    public function test_sitemap_entries_use_local_languages_without_server_credentials(): void
+    public function test_trusted_rewritten_language_is_noindexed_when_account_settings_are_unavailable(): void
+    {
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'placeholder-private-key');
+        config()->set('newtxt.api_key', 'replace-with-dashboard-api-key');
+        config()->set('newtxt.target_languages', []);
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('app.url', 'https://example.test');
+
+        Http::fake();
+
+        Route::middleware(['web', RewritesLanguagePrefixForNewtxtTest::class, 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source</title></head><body><main><h1>Source heading</h1><p>Source fallback content.</p></main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        $response = $this->get('/fr/about');
+
+        $response->assertOk();
+        $response->assertHeader('X-NewTXT-Translation-Status', 'incomplete');
+        $response->assertHeader('X-Robots-Tag', 'noindex, follow');
+        $response->assertSee('<meta name="robots" content="noindex,follow">', false);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_sitemap_entries_do_not_publish_languages_without_ready_snapshots(): void
     {
         config()->set('newtxt.public_key', 'public-site-key');
         config()->set('newtxt.private_key', 'placeholder-private-key');
@@ -63,20 +93,26 @@ class SeoMiddlewareIntegrationTest extends TestCase
         $locations = array_column($entries, 'loc');
 
         $this->assertContains('https://example.test/about', $locations);
-        $this->assertContains('https://example.test/fr/about', $locations);
-        $this->assertContains('https://example.test/de/about', $locations);
+        $this->assertNotContains('https://example.test/fr/about', $locations);
+        $this->assertNotContains('https://example.test/de/about', $locations);
 
         Http::assertNothingSent();
     }
 
     public function test_env_config_widget_directive_and_seo_middleware_work_together(): void
     {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-seo-' . bin2hex(random_bytes(6));
+
+        config()->set('newtxt.storage_path', $storagePath);
         config()->set('newtxt.public_key', 'public-site-key');
         config()->set('newtxt.private_key', 'private-site-key');
         config()->set('newtxt.api_key', 'api-site-key');
         config()->set('newtxt.account_settings_cache_ttl', 0);
         config()->set('newtxt.cache_ttl', 0);
         config()->set('app.url', 'https://example.test');
+        $this->beforeApplicationDestroyed(static function () use ($storagePath): void {
+            (new Filesystem())->deleteDirectory($storagePath);
+        });
 
         Http::fake([
             'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
@@ -116,7 +152,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
                     ['title' => 'Bonjour overview'],
                     ['title' => 'Bonjour details'],
                 ],
-                'html' => '<html><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1></main></body></html>',
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1><p>Localized translated page content.</p></main></body></html>',
             ]),
         ]);
 
@@ -138,27 +174,32 @@ class SeoMiddlewareIntegrationTest extends TestCase
         $sourceResponse->assertSee('<link rel="canonical" href="https://example.test/about">', false);
         $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="en">', false);
         $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="x-default">', false);
-        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/fr/about" hreflang="fr">', false);
-        $sourceResponse->assertSee('<link rel="alternate" href="https://example.test/de/about" hreflang="de">', false);
+        $sourceResponse->assertDontSee('hreflang="fr"', false);
+        $sourceResponse->assertDontSee('hreflang="de"', false);
         $sourceResponse->assertSee('<meta property="og:title" content="Source">', false);
         $sourceResponse->assertSee('<meta property="og:description" content="Source description">', false);
         $sourceResponse->assertSee('<meta name="newtxt:table-of-contents" content="Source overview | Source details">', false);
 
-        $response = $this->get('/fr/about?utm=campaign');
+        $response = $this->get('/fr/about');
 
         $response->assertOk();
+        $response->assertHeader('X-NewTXT-Translation-Status', 'ready');
         $response->assertSee('Bonjour', false);
         $response->assertDontSee('Source', false);
         $response->assertSee('<link rel="canonical" href="https://example.test/fr/about">', false);
         $response->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="en">', false);
         $response->assertSee('<link rel="alternate" href="https://example.test/about" hreflang="x-default">', false);
         $response->assertSee('<link rel="alternate" href="https://example.test/fr/about" hreflang="fr">', false);
-        $response->assertSee('<link rel="alternate" href="https://example.test/de/about" hreflang="de">', false);
+        $response->assertDontSee('hreflang="de"', false);
         $response->assertSee('<meta name="robots" content="index,follow">', false);
-        $response->assertSee('<title>Bonjour</title>', false);
-        $response->assertSee('<meta property="og:title" content="Bonjour">', false);
+        $response->assertSee('<title>Bonjour title</title>', false);
+        $response->assertSee('<meta property="og:title" content="Bonjour title">', false);
         $response->assertSee('<meta name="description" content="Bonjour translated description">', false);
         $response->assertSee('<meta name="newtxt:table-of-contents" content="Bonjour overview | Bonjour details">', false);
+
+        $sourceAfterReadyRender = $this->get('/about');
+        $sourceAfterReadyRender->assertSee('<link rel="alternate" href="https://example.test/fr/about" hreflang="fr">', false);
+        $sourceAfterReadyRender->assertDontSee('hreflang="de"', false);
 
         Http::assertSent(function ($request) {
             $payload = json_decode($request->body(), true);
@@ -174,6 +215,62 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 && $request->hasHeader('X-NewTXT-Signature')
                 && !$request->hasHeader('X-NewTXT-Private-Key');
         });
+    }
+
+    public function test_incomplete_remote_render_falls_back_to_noindex_source_html(): void
+    {
+        $renderRequests = 0;
+
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 86400);
+        config()->set('app.url', 'https://example.test');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000040',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'translationMode' => 'seo',
+                'targetLanguages' => [
+                    ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+                ],
+            ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                $renderRequests++;
+
+                return Http::response([
+                    'siteId' => '00000000-0000-0000-0000-000000000040',
+                    'languageCode' => 'fr',
+                    'path' => '/about',
+                    'urlMode' => 'path',
+                    'translatedUrl' => 'https://example.test/fr/about',
+                    'translationComplete' => false,
+                    'missingTargets' => 1,
+                    'html' => '<html><head><title>Incomplete localized page</title></head><body><main><h1>Incomplete localized heading</h1><p>Incomplete localized content.</p></main></body></html>',
+                ]);
+            },
+        ]);
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source page</title><meta name="robots" content="index,follow"></head><body><main><h1>Source heading</h1><p>Source content remains visible.</p></main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        $response = $this->get('/fr/about');
+
+        $response->assertOk();
+        $response->assertHeader('X-NewTXT-Translation-Status', 'incomplete');
+        $response->assertHeader('X-Robots-Tag', 'noindex, follow');
+        $response->assertSee('Source content remains visible.', false);
+        $response->assertDontSee('Incomplete localized content.', false);
+        $response->assertSee('<meta name="robots" content="noindex,follow">', false);
+
+        $secondResponse = $this->get('/fr/about');
+        $secondResponse->assertHeader('X-NewTXT-Translation-Status', 'incomplete');
+        $this->assertSame(2, $renderRequests);
     }
 
     public function test_rendered_page_snapshot_rehydrates_local_cache_without_remote_render(): void
@@ -220,7 +317,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
                         'urlMode' => 'path',
                         'translatedUrl' => 'https://example.test/fr/about',
                         'fromCache' => false,
-                        'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour from local snapshot</main></body></html>',
+                        'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1><p>Bonjour from local snapshot</p></main></body></html>',
                     ]);
                 },
             ]);
@@ -290,7 +387,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
                 'urlMode' => 'path',
                 'translatedUrl' => 'https://example.test/fr/about',
                 'fromCache' => false,
-                'html' => '<html><head><title>Bonjour rewritten</title></head><body><main>Bonjour rewritten page</main></body></html>',
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour rewritten</title></head><body><main><h1>Bonjour rewritten page</h1></main></body></html>',
             ]),
             'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/translations*' => Http::response([
                 'path' => '/about',
@@ -380,7 +477,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
                     'urlMode' => 'path',
                     'translatedUrl' => 'https://example.test/fr/about',
                     'fromCache' => false,
-                    'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour</main></body></html>',
+                    'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour translated page</h1></main></body></html>',
                 ]),
             ]);
 
@@ -408,7 +505,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
             $locations = array_column($sitemapEntries, 'loc');
 
             $this->assertContains('https://example.test/blog/travel-georgia-7-days', $locations);
-            $this->assertContains('https://example.test/fr/blog/travel-georgia-7-days', $locations);
+            $this->assertNotContains('https://example.test/fr/blog/travel-georgia-7-days', $locations);
             $this->assertContains('https://example.test/fr/about', $locations);
             $this->assertNotContains('https://fr.example.test/blog/travel-georgia-7-days', $locations);
         } finally {

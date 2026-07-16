@@ -2,6 +2,8 @@
 
 namespace Newtxt\Laravel;
 
+use DOMDocument;
+use DOMElement;
 use Illuminate\Cache\CacheManager;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Support\Arr;
@@ -16,6 +18,8 @@ use Throwable;
 
 class NewtxtManager
 {
+    private const RENDER_POLICY_VERSION = 'newtxt-laravel-v3';
+
     public function __construct(
         private readonly NewtxtClient $client,
         private readonly CacheManager $cache,
@@ -101,10 +105,26 @@ class NewtxtManager
             return $this->renderPage($languageCode, $path, $options);
         }
 
-        return $this->cacheStore()->remember($cacheKey, $ttl, function () use ($languageCode, $path, $options) {
-            return $this->localRenderedPageSnapshot($languageCode, $path, $options)
-                ?? $this->renderPage($languageCode, $path, $options);
-        });
+        $store = $this->cacheStore();
+        $cached = $store->get($cacheKey);
+        if (is_array($cached) && $this->isRenderedPageReady($cached, $languageCode)) {
+            $cached['fromLocalCache'] = true;
+            $cached['cacheSource'] = 'laravel-cache';
+
+            return $cached;
+        }
+        if ($cached !== null) {
+            $store->forget($cacheKey);
+        }
+
+        $rendered = $this->localRenderedPageSnapshot($languageCode, $path, $options)
+            ?? $this->renderPage($languageCode, $path, $options);
+
+        if (is_array($rendered) && $this->isRenderedPageReady($rendered, $languageCode)) {
+            $store->put($cacheKey, $rendered, $ttl);
+        }
+
+        return $rendered;
     }
 
     /**
@@ -208,7 +228,7 @@ class NewtxtManager
         $sourceLanguage = $this->sourceLanguage();
         $path = $this->normalizePath($path);
         $urlMode = (string) ($options['urlMode'] ?? $this->urlMode());
-        $version = (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v2');
+        $version = $this->pageHashVersion();
         $snapshot = [
             'siteId' => $siteId,
             'languageCode' => $sourceLanguage,
@@ -239,6 +259,31 @@ class NewtxtManager
         }
 
         return $this->seo->apply($html, $this->sourcePageSeoMetadata($path, $options));
+    }
+
+    /**
+     * Mark a translated URL as unavailable for indexing when SSR is incomplete.
+     */
+    public function applyIncompleteTranslatedPageSeo(
+        string $languageCode,
+        string $path,
+        string $html,
+        array $options = [],
+    ): string {
+        if (!$this->enabled() || trim($html) === '') {
+            return $html;
+        }
+
+        $urlMode = $this->normalizeUrlMode($options['urlMode'] ?? $this->urlMode()) ?? 'path';
+
+        return $this->seo->apply($html, [
+            'canonicalUrl' => $this->localizedPageUrl($path, $languageCode, $urlMode, $options),
+            'robots' => (string) $this->config->get('newtxt.incomplete_seo_robots', 'noindex,follow'),
+            'alternates' => [],
+            'replaceCanonical' => true,
+            'replaceAlternates' => true,
+            'replaceRobots' => true,
+        ]);
     }
 
     /**
@@ -275,26 +320,6 @@ class NewtxtManager
         foreach ($entries as $entry) {
             if (isset($entry['loc']) && is_string($entry['loc'])) {
                 $seen[$entry['loc']] = true;
-            }
-        }
-
-        foreach ($sourceEntries as $entry) {
-            $path = $this->sitemapEntryPath($entry);
-            if ($path === null || !$this->isSitemapPathAllowed($path)) {
-                continue;
-            }
-
-            foreach ($languages as $languageCode) {
-                $loc = $this->localizedSitemapUrl($baseSiteUrl, $path, $languageCode, $urlMode);
-                if (isset($seen[$loc])) {
-                    continue;
-                }
-
-                $seen[$loc] = true;
-                $entries[] = [
-                    ...$entry,
-                    'loc' => $loc,
-                ];
             }
         }
 
@@ -337,6 +362,10 @@ class NewtxtManager
         }
 
         $siteId = trim((string) ($options['siteId'] ?? $this->siteId()));
+        if ($siteId === '') {
+            return [];
+        }
+
         $outputUrlMode = $this->normalizeUrlMode($options['urlMode'] ?? null);
         $includeQueryStrings = filter_var($options['includeQueryStrings'] ?? false, FILTER_VALIDATE_BOOL);
         $baseSiteUrl = $this->normalizeSitemapSiteUrl($siteUrl ?? $this->config->get('app.url'));
@@ -345,7 +374,14 @@ class NewtxtManager
         }
 
         $entries = [];
-        foreach ($this->snapshots->allForSitemap($siteId !== '' ? $siteId : null, $languages) as $snapshot) {
+        foreach ($this->snapshots->allForSitemap($siteId, $languages) as $snapshot) {
+            if (
+                ($snapshot['translationReady'] ?? false) !== true
+                || (string) ($snapshot['pageHashVersion'] ?? '') !== $this->pageHashVersion()
+            ) {
+                continue;
+            }
+
             $languageCode = $this->normalizeLanguageCode((string) ($snapshot['languageCode'] ?? ''));
             if (!in_array($languageCode, $languages, true)) {
                 continue;
@@ -406,6 +442,58 @@ class NewtxtManager
     public function canRenderTranslatedPages(): bool
     {
         return $this->canServeTranslatedPages() && $this->hasServerCredentials();
+    }
+
+    /**
+     * Return true only for complete translated HTML that is safe to index.
+     */
+    public function isRenderedPageReady(array $rendered, ?string $languageCode = null): bool
+    {
+        foreach (['translationReady', 'readyForIndexing', 'isComplete', 'translationComplete', 'isReady'] as $key) {
+            if (!Arr::has($rendered, $key)) {
+                continue;
+            }
+
+            $value = filter_var(Arr::get($rendered, $key), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+            if ($value === false) {
+                return false;
+            }
+        }
+
+        foreach (['missingTranslations', 'missingNodes', 'missingTargets', 'untranslatedNodes'] as $key) {
+            $value = Arr::get($rendered, $key);
+            if (is_numeric($value) && (float) $value > 0) {
+                return false;
+            }
+        }
+
+        foreach (['completionPercent', 'translationProgress'] as $key) {
+            $value = Arr::get($rendered, $key);
+            if (!is_numeric($value)) {
+                continue;
+            }
+
+            $progress = (float) $value;
+            if (($progress <= 1 && $progress < 1) || ($progress > 1 && $progress < 100)) {
+                return false;
+            }
+        }
+
+        $status = strtolower(trim((string) $this->firstMetadataValue($rendered, [
+            'translationStatus',
+            'readinessStatus',
+            'translation.status',
+        ])));
+        if (in_array($status, ['partial', 'incomplete', 'pending', 'processing', 'failed', 'error'], true)) {
+            return false;
+        }
+
+        $html = $rendered['html'] ?? null;
+        if (!is_string($html) || trim($html) === '') {
+            return false;
+        }
+
+        return $this->hasIndexableTranslatedHtml($html, $languageCode);
     }
 
     /**
@@ -497,6 +585,17 @@ class NewtxtManager
             $rendered['html'] = $html;
         }
 
+        $allowsPartialTranslations = filter_var(
+            $options['allowPartialTranslations'] ?? false,
+            FILTER_VALIDATE_BOOL,
+            FILTER_NULL_ON_FAILURE,
+        ) === true;
+        $rendered['translationReady'] = !$allowsPartialTranslations
+            && $this->isRenderedPageReady($rendered, $languageCode);
+        if (!$rendered['translationReady']) {
+            return $rendered;
+        }
+
         $version = $this->pageHashVersion();
         $rendered['htmlHash'] = $this->hasher->htmlHash($html);
         $rendered['pageHash'] = $this->hasher->pageHash($siteId, $languageCode, $urlMode, $path, $html, $version);
@@ -558,6 +657,13 @@ class NewtxtManager
             'canonicalUrl' => $canonicalUrl,
             'robots' => $this->seoRobots(),
             'alternates' => $this->pageAlternates($path, $languageCode, $urlMode, $options, $rendered),
+            'languageCode' => $languageCode,
+            'replaceCanonical' => true,
+            'replaceAlternates' => true,
+            'replaceRobots' => true,
+            'replaceTitle' => true,
+            'replaceDescription' => true,
+            'replaceSocialMetadata' => true,
         ];
 
         $title = $this->firstMetadataValue($rendered, [
@@ -618,6 +724,7 @@ class NewtxtManager
             'canonicalUrl' => $this->sourcePageUrl($path, $options),
             'robots' => $this->seoRobots(),
             'alternates' => $this->pageAlternates($path, null, $urlMode, $options),
+            'languageCode' => $this->sourceLanguage(),
         ];
         $customMetadata = is_array($options['seo'] ?? null) ? $options['seo'] : [];
 
@@ -653,10 +760,11 @@ class NewtxtManager
             ];
         }
 
-        $languages = array_values(array_unique(array_filter(array_merge(
-            $this->targetLanguages(),
-            $languageCode !== null ? [$this->normalizeLanguageCode($languageCode)] : [],
-        ))));
+        $languages = $this->readyLanguagesForPath($path, $urlMode);
+        if ($languageCode !== null) {
+            $languages[] = $this->normalizeLanguageCode($languageCode);
+            $languages = array_values(array_unique($languages));
+        }
 
         foreach ($languages as $targetLanguage) {
             if ($targetLanguage === $sourceLanguage) {
@@ -678,7 +786,46 @@ class NewtxtManager
             ];
         }
 
-        return $this->mergeAlternates($generated, $this->renderedAlternates($rendered));
+        return $this->mergeAlternates($generated);
+    }
+
+    /**
+     * Return target languages with a complete canonical snapshot for this path.
+     *
+     * Only snapshot-backed variants are advertised from source pages. The
+     * currently rendered language is added by pageAlternates() before the new
+     * snapshot is persisted.
+     *
+     * @return list<string>
+     */
+    private function readyLanguagesForPath(string $path, string $urlMode): array
+    {
+        $siteId = $this->siteId();
+        if ($siteId === '') {
+            return [];
+        }
+
+        $ready = [];
+        foreach ($this->targetLanguages() as $languageCode) {
+            try {
+                $snapshot = $this->snapshots->get(
+                    $siteId,
+                    $languageCode,
+                    $urlMode,
+                    $path,
+                    '',
+                    $this->pageHashVersion(),
+                );
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (is_array($snapshot) && $this->isRenderedPageReady($snapshot, $languageCode)) {
+                $ready[] = $languageCode;
+            }
+        }
+
+        return array_values(array_unique($ready));
     }
 
     /**
@@ -789,7 +936,7 @@ class NewtxtManager
         }
 
         try {
-            return $this->snapshots->get(
+            $snapshot = $this->snapshots->get(
                 $siteId,
                 $languageCode,
                 (string) ($options['urlMode'] ?? $this->urlMode()),
@@ -797,9 +944,109 @@ class NewtxtManager
                 (string) ($options['query'] ?? ''),
                 $this->pageHashVersion(),
             );
+
+            return is_array($snapshot) && $this->isRenderedPageReady($snapshot, $languageCode)
+                ? $snapshot
+                : null;
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Validate the minimum SSR contract for an indexable translated page.
+     */
+    private function hasIndexableTranslatedHtml(string $html, ?string $languageCode): bool
+    {
+        $document = new DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        $loaded = $document->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        if (!$loaded) {
+            return false;
+        }
+
+        $title = $document->getElementsByTagName('title')->item(0);
+        if (!$title instanceof DOMElement || trim($title->textContent) === '') {
+            return false;
+        }
+
+        $description = '';
+        $canonicalUrl = null;
+        $selfAlternate = false;
+        foreach ($document->getElementsByTagName('meta') as $meta) {
+            if ($meta instanceof DOMElement && strcasecmp($meta->getAttribute('name'), 'description') === 0) {
+                $description = trim($meta->getAttribute('content'));
+                break;
+            }
+        }
+        if ($description === '') {
+            return false;
+        }
+
+        $normalizedLanguage = $languageCode !== null ? $this->normalizeLanguageCode($languageCode) : null;
+        foreach ($document->getElementsByTagName('link') as $link) {
+            if (!$link instanceof DOMElement) {
+                continue;
+            }
+
+            $rel = strtolower(trim($link->getAttribute('rel')));
+            if ($rel === 'canonical') {
+                $canonicalUrl = $this->safeHttpUrl($link->getAttribute('href'));
+            }
+
+            if (
+                $rel === 'alternate'
+                && $normalizedLanguage !== null
+                && strcasecmp($link->getAttribute('hreflang'), $normalizedLanguage) === 0
+                && $this->safeHttpUrl($link->getAttribute('href')) !== null
+            ) {
+                $selfAlternate = true;
+            }
+        }
+        if ($canonicalUrl === null || ($normalizedLanguage !== null && !$selfAlternate)) {
+            return false;
+        }
+
+        if ($normalizedLanguage !== null) {
+            $documentLanguage = $document->documentElement instanceof DOMElement
+                ? $this->normalizeLanguageCode($document->documentElement->getAttribute('lang'))
+                : '';
+            if ($documentLanguage !== $normalizedLanguage) {
+                return false;
+            }
+
+            if ((bool) $this->config->get('newtxt.require_translated_render_marker', true)) {
+                if (!$document->documentElement instanceof DOMElement) {
+                    return false;
+                }
+
+                $marker = strtolower(trim($document->documentElement->getAttribute('data-cservice-rendered')));
+                $markerLanguage = $this->normalizeLanguageCode(
+                    $document->documentElement->getAttribute('data-cservice-rendered-language'),
+                );
+                if ($marker !== 'translated-html' || $markerLanguage !== $normalizedLanguage) {
+                    return false;
+                }
+            }
+        }
+
+        $heading = $document->getElementsByTagName('h1')->item(0);
+        if (!$heading instanceof DOMElement || trim($heading->textContent) === '') {
+            return false;
+        }
+
+        $main = $document->getElementsByTagName('main')->item(0);
+        $content = $main instanceof DOMElement
+            ? $main->textContent
+            : ($document->getElementsByTagName('body')->item(0)?->textContent ?? '');
+
+        $content = trim(preg_replace('/\s+/u', ' ', $content) ?? $content);
+        $length = function_exists('mb_strlen') ? mb_strlen($content) : strlen($content);
+
+        return $length >= 10;
     }
 
     /**
@@ -825,7 +1072,12 @@ class NewtxtManager
      */
     private function pageHashVersion(): string
     {
-        return (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v2');
+        $configured = trim((string) $this->config->get('newtxt.page_hash_version', self::RENDER_POLICY_VERSION));
+        if ($configured === '' || $configured === self::RENDER_POLICY_VERSION) {
+            return self::RENDER_POLICY_VERSION;
+        }
+
+        return self::RENDER_POLICY_VERSION . ':' . $configured;
     }
 
     /**

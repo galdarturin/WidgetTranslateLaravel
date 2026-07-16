@@ -194,7 +194,7 @@ storage/app/newtxt/pages/{siteId}/{languageCode}/indexes/{lookupHash}.json
 
 For source pages, the middleware can record the Laravel-rendered source HTML response hash when `store_source_page_hashes` is enabled in the published package config. This snapshot is captured before the local SEO pass so generated head tags do not become translation source content. Full source HTML is stored only when `store_source_html` is enabled.
 
-The default `page_hash_version` is `newtxt-laravel-v2` because the local SEO pass now writes a complete canonical and hreflang set plus page metadata. Applications with a published config should bump this value when deploying the updated package if old local snapshots must be invalidated immediately.
+The package render policy is `newtxt-laravel-v3`. This version invalidates snapshots created before translated-page readiness checks, authoritative translated metadata, and localized page-level JSON-LD were introduced. A published `page_hash_version` remains an application-controlled suffix for additional invalidation, so an older published value cannot bypass the package render-policy version.
 
 Applications provide their source sitemap entries and let the package build the translated sitemap output:
 
@@ -202,14 +202,14 @@ Applications provide their source sitemap entries and let the package build the 
 $entries = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMode' => 'path']);
 ```
 
-The package reads target languages from NewTXT account settings or local fallback config, builds translated locations from the provided site URL, and includes locally stored rendered page snapshots. Query-string snapshots are excluded by default.
+The package reads target languages from NewTXT account settings or local fallback config, but publishes a translated sitemap location only after a complete canonical rendered-page snapshot has been stored for that language and path. Merely configuring a language no longer publishes every possible translated URL. Query-string snapshots and incomplete or older-version snapshots are excluded.
 
 ## SEO Metadata
 
-When local SEO metadata injection is enabled in the package config or account settings, public source HTML and rendered translated HTML receive a local SEO pass. Translated HTML is processed before it is cached or written to storage. The pass preserves native page metadata and adds only missing tags:
+When local SEO metadata injection is enabled in the package config or account settings, public source HTML and rendered translated HTML receive a local SEO pass. Translated HTML is processed before it is cached or written to storage. Source pages preserve native metadata and receive only missing values. Complete translated pages treat the translated render as authoritative and replace stale source-language title, description, canonical, robots, Open Graph, Twitter, and language-alternate values.
 
 - `<link rel="canonical">`
-- `<link rel="alternate" hreflang="...">` for the source page, every configured target language, and `x-default`
+- `<link rel="alternate" hreflang="...">` for the source page, `x-default`, the current translated page, and other snapshot-backed ready languages
 - `<title>` from supplied page title metadata or page headings when missing
 - `<meta name="description">`
 - `<meta property="og:url">`
@@ -217,8 +217,13 @@ When local SEO metadata injection is enabled in the package config or account se
 - `<meta name="robots">`
 - Open Graph and Twitter title/description values
 - `<meta name="newtxt:table-of-contents">` from supplied table-of-contents metadata or page headings
+- `<html lang="...">` and page-level JSON-LD `inLanguage`, URL, title, and description values
 
 For translated pages, the canonical URL comes from the NewTXT render response when available and falls back to the configured URL mode. For source pages, the canonical URL comes from `app.url` plus the source path. Only absolute `http` and `https` URLs are accepted for SEO URL tags.
+
+An indexable translated response must contain the NewTXT translated-render marker, complete rendered HTML, a title, description, H1, meaningful main content, a safe canonical URL, a self-referencing hreflang, and the requested document language. Explicit partial, pending, failed, or missing-target render signals are rejected. If server credentials are unavailable or the render is incomplete, middleware serves the application response with `X-Robots-Tag: noindex, follow`, `<meta name="robots" content="noindex,follow">`, no language alternates, and `X-NewTXT-Translation-Status: incomplete`. A ready server-rendered response uses `X-NewTXT-Translation-Status: ready`.
+
+SSR rendering requires dashboard-issued `NEWTXT_API_KEY` and `NEWTXT_PRIVATE_KEY` values in addition to the public key. Placeholder credentials intentionally disable remote rendering; do not publish translated URLs until real server credentials are configured and canonical pages have been prewarmed or rendered successfully.
 
 ## Signed Service Callback
 

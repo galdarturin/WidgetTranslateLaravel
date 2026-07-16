@@ -25,7 +25,7 @@ class ServeNewtxtTranslatedPages
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (!$this->shouldAttemptTranslation($request)) {
+        if (!$this->shouldProcessPage($request)) {
             return $next($request);
         }
 
@@ -38,17 +38,22 @@ class ServeNewtxtTranslatedPages
         }
 
         [$languageCode, $sourcePath] = $translationContext;
-        $rendered = $this->newtxt->rememberRenderedPage($languageCode, $sourcePath, [
-            'query' => $request->getQueryString() ?? '',
-        ]);
+        $rendered = $this->newtxt->canRenderTranslatedPages()
+            ? $this->newtxt->rememberRenderedPage($languageCode, $sourcePath, [
+                'query' => $request->getQueryString() ?? '',
+            ])
+            : null;
 
-        if (!is_array($rendered) || !isset($rendered['html'])) {
-            return $next($request);
+        if (!is_array($rendered) || !$this->newtxt->isRenderedPageReady($rendered, $languageCode)) {
+            $response = $next($request);
+
+            return $this->applyIncompleteTranslatedPageSeo($response, $languageCode, $sourcePath);
         }
 
         $response = response($rendered['html'], 200)
             ->header('Content-Type', 'text/html; charset=UTF-8')
-            ->header('X-NewTXT-Cache', $this->cacheHeader($rendered));
+            ->header('X-NewTXT-Cache', $this->cacheHeader($rendered))
+            ->header('X-NewTXT-Translation-Status', 'ready');
 
         foreach (['pageHash' => 'X-NewTXT-Page-Hash', 'htmlHash' => 'X-NewTXT-Html-Hash'] as $key => $header) {
             if (isset($rendered[$key]) && is_string($rendered[$key]) && $rendered[$key] !== '') {
@@ -92,9 +97,6 @@ class ServeNewtxtTranslatedPages
     private function languageFromRequestAttributes(Request $request): ?string
     {
         $targetLanguages = $this->newtxt->targetLanguages();
-        if ($targetLanguages === []) {
-            return null;
-        }
 
         foreach ((array) config('newtxt.request_language_attributes', []) as $attribute) {
             $attribute = trim((string) $attribute);
@@ -112,7 +114,7 @@ class ServeNewtxtTranslatedPages
                 continue;
             }
 
-            if (in_array($languageCode, $targetLanguages, true)) {
+            if ($targetLanguages === [] || in_array($languageCode, $targetLanguages, true)) {
                 return $languageCode;
             }
         }
@@ -125,7 +127,11 @@ class ServeNewtxtTranslatedPages
      */
     private function cacheHeader(array $rendered): string
     {
-        if (($rendered['cacheSource'] ?? null) === 'local-snapshot' || ($rendered['fromLocalSnapshot'] ?? false) === true) {
+        if (
+            in_array($rendered['cacheSource'] ?? null, ['local-snapshot', 'laravel-cache'], true)
+            || ($rendered['fromLocalSnapshot'] ?? false) === true
+            || ($rendered['fromLocalCache'] ?? false) === true
+        ) {
             return 'local-hit';
         }
 
@@ -135,9 +141,9 @@ class ServeNewtxtTranslatedPages
     /**
      * Check request-level safety before any remote call or cache lookup.
      */
-    private function shouldAttemptTranslation(Request $request): bool
+    private function shouldProcessPage(Request $request): bool
     {
-        if (!$this->newtxt->canRenderTranslatedPages()) {
+        if (!$this->newtxt->enabled()) {
             return false;
         }
 
@@ -160,6 +166,44 @@ class ServeNewtxtTranslatedPages
         }
 
         return !Str::startsWith($request->path(), ['_', '.']);
+    }
+
+    /**
+     * Keep incomplete localized URLs out of search indexes.
+     */
+    private function applyIncompleteTranslatedPageSeo(
+        Response $response,
+        string $languageCode,
+        string $sourcePath,
+    ): Response {
+        $response->headers->set('X-NewTXT-Translation-Status', 'incomplete');
+        $response->headers->set('X-Robots-Tag', 'noindex, follow');
+
+        if (!$this->isHtmlResponse($response)) {
+            return $response;
+        }
+
+        $content = $response->getContent();
+        if (!is_string($content) || trim($content) === '') {
+            return $response;
+        }
+
+        try {
+            $html = $this->newtxt->applyIncompleteTranslatedPageSeo(
+                $languageCode,
+                $sourcePath,
+                $content,
+            );
+        } catch (Throwable) {
+            return $response;
+        }
+
+        if ($html !== $content) {
+            $response->setContent($html);
+            $response->headers->remove('Content-Length');
+        }
+
+        return $response;
     }
 
     /**

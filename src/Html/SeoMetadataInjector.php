@@ -31,45 +31,63 @@ class SeoMetadataInjector
         }
 
         $head = $this->ensureHead($document);
+        $languageCode = $this->languageCode($metadata['languageCode'] ?? null);
+        if ($languageCode !== null && $document->documentElement instanceof DOMElement) {
+            $document->documentElement->setAttribute('lang', $languageCode);
+        }
+
         $metadataTitle = $this->textValue($metadata['title'] ?? $metadata['pageTitle'] ?? null);
-        $title = $this->existingTitle($document);
+        $replaceTitle = (bool) ($metadata['replaceTitle'] ?? false);
+        $title = $replaceTitle && $metadataTitle !== '' ? $metadataTitle : $this->existingTitle($document);
         if ($title === '') {
             $title = $metadataTitle !== '' ? $metadataTitle : $this->firstHeading($document);
         }
 
         if ($title !== '') {
-            $this->insertTitleIfMissing($document, $head, $title);
+            $replaceTitle
+                ? $this->upsertTitle($document, $head, $title)
+                : $this->insertTitleIfMissing($document, $head, $title);
         }
 
         $metadataCanonicalUrl = $this->safeHttpUrl($metadata['canonicalUrl'] ?? null);
-        $canonicalUrl = $this->existingCanonicalUrl($head) ?? $metadataCanonicalUrl;
+        $replaceCanonical = (bool) ($metadata['replaceCanonical'] ?? false);
+        $canonicalUrl = $replaceCanonical ? $metadataCanonicalUrl : ($this->existingCanonicalUrl($head) ?? $metadataCanonicalUrl);
         if ($metadataCanonicalUrl !== null) {
-            $this->insertCanonicalLinkIfMissing($document, $head, $metadataCanonicalUrl);
+            $replaceCanonical
+                ? $this->replaceCanonicalLink($document, $head, $metadataCanonicalUrl)
+                : $this->insertCanonicalLinkIfMissing($document, $head, $metadataCanonicalUrl);
         }
 
         if ($canonicalUrl !== null) {
-            $this->insertMetaIfMissing($document, $head, 'property', 'og:url', $canonicalUrl);
-            $this->insertMetaIfMissing($document, $head, 'name', 'twitter:url', $canonicalUrl);
+            $this->writeMeta($document, $head, 'property', 'og:url', $canonicalUrl, $replaceCanonical);
+            $this->writeMeta($document, $head, 'name', 'twitter:url', $canonicalUrl, $replaceCanonical);
         }
 
         $alternates = $this->normalizedAlternates($metadata['alternates'] ?? []);
+        if ((bool) ($metadata['replaceAlternates'] ?? false)) {
+            $this->removeHreflangAlternates($head);
+        }
         if ($alternates !== []) {
             $this->insertMissingAlternateLinks($document, $head, $alternates);
         }
 
         $robots = trim((string) ($metadata['robots'] ?? ''));
         if ($robots !== '') {
-            $this->insertMetaIfMissing($document, $head, 'name', 'robots', $robots);
+            $this->writeMeta($document, $head, 'name', 'robots', $robots, (bool) ($metadata['replaceRobots'] ?? false));
         }
 
-        $description = $this->existingMetaContent($head, 'name', 'description');
+        $metadataDescription = $this->textValue(
+            $metadata['description']
+                ?? $metadata['metaDescription']
+                ?? $metadata['summary']
+                ?? null,
+        );
+        $replaceDescription = (bool) ($metadata['replaceDescription'] ?? false);
+        $description = $replaceDescription && $metadataDescription !== ''
+            ? $metadataDescription
+            : $this->existingMetaContent($head, 'name', 'description');
         if ($description === '') {
-            $description = $this->textValue(
-                $metadata['description']
-                    ?? $metadata['metaDescription']
-                    ?? $metadata['summary']
-                    ?? null,
-            );
+            $description = $metadataDescription;
         }
         if ($description === '') {
             $description = $this->pageDescription($document);
@@ -85,6 +103,7 @@ class SeoMetadataInjector
             $tableOfContents = $this->headingTableOfContents($document);
         }
 
+        $replaceSocialMetadata = (bool) ($metadata['replaceSocialMetadata'] ?? false);
         foreach ([
             ['name', 'description', $description],
             ['property', 'og:title', $title],
@@ -95,8 +114,14 @@ class SeoMetadataInjector
         ] as [$attribute, $key, $value]) {
             $value = $this->textValue($value);
             if ($value !== '') {
-                $this->insertMetaIfMissing($document, $head, $attribute, $key, $value);
+                $replace = ($key === 'description' && $replaceDescription)
+                    || ($replaceSocialMetadata && in_array($key, ['og:title', 'og:description', 'twitter:title', 'twitter:description'], true));
+                $this->writeMeta($document, $head, $attribute, $key, $value, $replace);
             }
+        }
+
+        if ($languageCode !== null) {
+            $this->localizeStructuredData($document, $languageCode, $canonicalUrl, $title, $description);
         }
 
         $result = $document->saveHTML();
@@ -104,7 +129,35 @@ class SeoMetadataInjector
             return $html;
         }
 
-        return preg_replace('/^<\?xml encoding="UTF-8"\?>\s*/', '', $result) ?? $result;
+        return preg_replace('/^<\?xml encoding="UTF-8"\s*\??>\s*/', '', $result) ?? $result;
+    }
+
+    /**
+     * Set the document title and remove duplicate title elements.
+     */
+    private function upsertTitle(DOMDocument $document, DOMElement $head, string $title): void
+    {
+        $titles = [];
+        foreach ($head->getElementsByTagName('title') as $element) {
+            if ($element instanceof DOMElement) {
+                $titles[] = $element;
+            }
+        }
+
+        $titleElement = array_shift($titles);
+        if (!$titleElement instanceof DOMElement) {
+            $titleElement = $document->createElement('title');
+            $head->insertBefore($titleElement, $head->firstChild);
+        }
+
+        while ($titleElement->firstChild !== null) {
+            $titleElement->removeChild($titleElement->firstChild);
+        }
+        $titleElement->appendChild($document->createTextNode($title));
+
+        foreach ($titles as $duplicate) {
+            $duplicate->parentNode?->removeChild($duplicate);
+        }
     }
 
     /**
@@ -167,6 +220,49 @@ class SeoMetadataInjector
         $link->setAttribute('rel', 'canonical');
         $link->setAttribute('href', $href);
         $head->appendChild($link);
+    }
+
+    /**
+     * Replace native canonical links on an authoritative translated page.
+     */
+    private function replaceCanonicalLink(DOMDocument $document, DOMElement $head, string $href): void
+    {
+        $links = [];
+        foreach ($head->getElementsByTagName('link') as $link) {
+            if ($link instanceof DOMElement && strcasecmp($link->getAttribute('rel'), 'canonical') === 0) {
+                $links[] = $link;
+            }
+        }
+
+        foreach ($links as $link) {
+            $link->parentNode?->removeChild($link);
+        }
+
+        $canonical = $document->createElement('link');
+        $canonical->setAttribute('rel', 'canonical');
+        $canonical->setAttribute('href', $href);
+        $head->appendChild($canonical);
+    }
+
+    /**
+     * Remove only language alternates, preserving feeds and other alternates.
+     */
+    private function removeHreflangAlternates(DOMElement $head): void
+    {
+        $links = [];
+        foreach ($head->getElementsByTagName('link') as $link) {
+            if (
+                $link instanceof DOMElement
+                && strcasecmp($link->getAttribute('rel'), 'alternate') === 0
+                && trim($link->getAttribute('hreflang')) !== ''
+            ) {
+                $links[] = $link;
+            }
+        }
+
+        foreach ($links as $link) {
+            $link->parentNode?->removeChild($link);
+        }
     }
 
     /**
@@ -256,6 +352,152 @@ class SeoMetadataInjector
         $meta->setAttribute($attribute, $key);
         $meta->setAttribute('content', $content);
         $head->appendChild($meta);
+    }
+
+    /**
+     * Insert or authoritatively replace one metadata value.
+     */
+    private function writeMeta(
+        DOMDocument $document,
+        DOMElement $head,
+        string $attribute,
+        string $key,
+        string $content,
+        bool $replace,
+    ): void {
+        if (!$replace) {
+            $this->insertMetaIfMissing($document, $head, $attribute, $key, $content);
+
+            return;
+        }
+
+        $matches = [];
+        foreach ($head->getElementsByTagName('meta') as $meta) {
+            if ($meta instanceof DOMElement && strcasecmp($meta->getAttribute($attribute), $key) === 0) {
+                $matches[] = $meta;
+            }
+        }
+
+        $meta = array_shift($matches);
+        if (!$meta instanceof DOMElement) {
+            $meta = $document->createElement('meta');
+            $meta->setAttribute($attribute, $key);
+            $head->appendChild($meta);
+        }
+        $meta->setAttribute('content', $content);
+
+        foreach ($matches as $duplicate) {
+            $duplicate->parentNode?->removeChild($duplicate);
+        }
+    }
+
+    /**
+     * Localize page-level JSON-LD without changing organization or product data.
+     */
+    private function localizeStructuredData(
+        DOMDocument $document,
+        string $languageCode,
+        ?string $canonicalUrl,
+        string $title,
+        string $description,
+    ): void {
+        $scripts = [];
+        foreach ($document->getElementsByTagName('script') as $script) {
+            if ($script instanceof DOMElement && strcasecmp($script->getAttribute('type'), 'application/ld+json') === 0) {
+                $scripts[] = $script;
+            }
+        }
+
+        foreach ($scripts as $script) {
+            $payload = json_decode($script->textContent, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+            if (!is_array($payload)) {
+                continue;
+            }
+
+            $localized = $this->localizeStructuredValue(
+                $payload,
+                $languageCode,
+                $canonicalUrl,
+                $title,
+                $description,
+            );
+            $json = json_encode(
+                $localized,
+                JSON_UNESCAPED_SLASHES
+                    | JSON_UNESCAPED_UNICODE
+                    | JSON_HEX_TAG
+                    | JSON_HEX_AMP
+                    | JSON_HEX_APOS
+                    | JSON_HEX_QUOT,
+            );
+            if (!is_string($json)) {
+                continue;
+            }
+
+            while ($script->firstChild !== null) {
+                $script->removeChild($script->firstChild);
+            }
+            $script->appendChild($document->createTextNode($json));
+        }
+    }
+
+    /**
+     * Recursively update page-like structured data objects.
+     */
+    private function localizeStructuredValue(
+        array $value,
+        string $languageCode,
+        ?string $canonicalUrl,
+        string $title,
+        string $description,
+    ): array {
+        $types = array_map(
+            static fn ($type): string => strtolower(trim((string) $type)),
+            is_array($value['@type'] ?? null) ? $value['@type'] : [$value['@type'] ?? null],
+        );
+        $languageTypes = ['website', 'webpage', 'article', 'newsarticle', 'blogposting', 'aboutpage', 'contactpage', 'collectionpage', 'itempage', 'faqpage'];
+        $pageTypes = ['webpage', 'article', 'newsarticle', 'blogposting', 'aboutpage', 'contactpage', 'collectionpage', 'itempage', 'faqpage'];
+        $isLanguageAware = array_intersect($types, $languageTypes) !== [];
+        $isPage = array_intersect($types, $pageTypes) !== [];
+
+        if ($isLanguageAware) {
+            $value['inLanguage'] = $languageCode;
+        }
+
+        if ($isPage) {
+            if ($title !== '') {
+                $value['name'] = $title;
+                if (array_key_exists('headline', $value) || array_intersect($types, ['article', 'newsarticle', 'blogposting']) !== []) {
+                    $value['headline'] = $title;
+                }
+            }
+            if ($description !== '') {
+                $value['description'] = $description;
+            }
+            if ($canonicalUrl !== null) {
+                if (array_key_exists('url', $value)) {
+                    $value['url'] = $canonicalUrl;
+                }
+                if (isset($value['@id']) && is_string($value['@id'])) {
+                    $fragment = parse_url($value['@id'], PHP_URL_FRAGMENT);
+                    $value['@id'] = $canonicalUrl . (is_string($fragment) && $fragment !== '' ? '#' . $fragment : '');
+                }
+            }
+        }
+
+        foreach ($value as $key => $item) {
+            if (is_array($item)) {
+                $value[$key] = $this->localizeStructuredValue(
+                    $item,
+                    $languageCode,
+                    $canonicalUrl,
+                    $title,
+                    $description,
+                );
+            }
+        }
+
+        return $value;
     }
 
     /**
@@ -433,6 +675,16 @@ class SeoMetadataInjector
         }
 
         return filter_var($value, FILTER_VALIDATE_URL) ? $value : null;
+    }
+
+    /**
+     * Normalize a BCP 47-like language value used in HTML and JSON-LD.
+     */
+    private function languageCode(mixed $value): ?string
+    {
+        $value = strtolower(str_replace('_', '-', trim((string) $value)));
+
+        return preg_match('/^[a-z0-9][a-z0-9-]{1,19}$/', $value) === 1 ? $value : null;
     }
 
     /**

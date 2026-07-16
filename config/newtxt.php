@@ -101,7 +101,8 @@ return [
     'store_source_html' => false,
     'sync_hashed_translations_on_render' => true,
     'sync_hashed_translations_on_prewarm' => true,
-    'page_hash_version' => 'newtxt-laravel-v2',
+    'page_hash_version' => 'newtxt-laravel-v3',
+    'require_translated_render_marker' => true,
 
     /*
     |--------------------------------------------------------------------------
@@ -115,6 +116,7 @@ return [
     */
     'inject_seo_metadata' => true,
     'seo_robots' => 'index,follow',
+    'incomplete_seo_robots' => 'noindex,follow',
 
     /*
     |--------------------------------------------------------------------------

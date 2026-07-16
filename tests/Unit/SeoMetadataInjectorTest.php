@@ -74,6 +74,46 @@ class SeoMetadataInjectorTest extends TestCase
         $this->assertStringContainsString('hreflang="fr"', $html);
     }
 
+    public function test_it_replaces_translated_metadata_and_localizes_page_json_ld(): void
+    {
+        $injector = new SeoMetadataInjector();
+
+        $html = $injector->apply(
+            '<html lang="en"><head><title>Source title</title><meta name="description" content="Source description"><meta name="robots" content="index,follow"><meta property="og:title" content="Source title"><link rel="canonical" href="https://example.test/about"><link rel="alternate" hreflang="de" href="https://example.test/de/about"><link rel="alternate" type="application/rss+xml" href="https://example.test/feed"><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","url":"https://example.test","name":"Example","inLanguage":"en"}</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","@id":"https://example.test/about#webpage","url":"https://example.test/about","name":"Source title","description":"Source description","inLanguage":"en"}</script></head><body><main><h1>Localized heading</h1><p>Localized main content for the translated page.</p></main></body></html>',
+            [
+                'canonicalUrl' => 'https://example.test/fr/about',
+                'robots' => 'index,follow',
+                'languageCode' => 'fr',
+                'alternates' => [
+                    ['href' => 'https://example.test/about', 'hreflang' => 'en'],
+                    ['href' => 'https://example.test/about', 'hreflang' => 'x-default'],
+                    ['href' => 'https://example.test/fr/about', 'hreflang' => 'fr'],
+                ],
+                'title' => 'Localized page title',
+                'description' => 'Localized page description',
+                'replaceCanonical' => true,
+                'replaceAlternates' => true,
+                'replaceRobots' => true,
+                'replaceTitle' => true,
+                'replaceDescription' => true,
+                'replaceSocialMetadata' => true,
+            ],
+        );
+
+        $this->assertStringContainsString('<html lang="fr">', $html);
+        $this->assertStringContainsString('<title>Localized page title</title>', $html);
+        $this->assertStringContainsString('name="description" content="Localized page description"', $html);
+        $this->assertStringContainsString('property="og:title" content="Localized page title"', $html);
+        $this->assertStringContainsString('rel="canonical" href="https://example.test/fr/about"', $html);
+        $this->assertStringNotContainsString('hreflang="de"', $html);
+        $this->assertStringContainsString('hreflang="fr"', $html);
+        $this->assertStringContainsString('type="application/rss+xml"', $html);
+        $this->assertStringContainsString('"@type":"WebSite","url":"https://example.test","name":"Example","inLanguage":"fr"', $html);
+        $this->assertStringContainsString('"@id":"https://example.test/fr/about#webpage"', $html);
+        $this->assertStringContainsString('"url":"https://example.test/fr/about","name":"Localized page title","description":"Localized page description","inLanguage":"fr"', $html);
+        $this->assertStringNotContainsString('Source description', $html);
+    }
+
     public function test_it_rejects_unsafe_seo_urls(): void
     {
         $injector = new SeoMetadataInjector();
