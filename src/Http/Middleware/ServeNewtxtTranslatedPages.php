@@ -59,6 +59,10 @@ class ServeNewtxtTranslatedPages
             return $this->applyIncompleteTranslatedPageSeo($response, $languageCode, $sourcePath);
         }
 
+        $this->newtxt->queueRenderedPageRefresh($languageCode, $sourcePath, [
+            'query' => $request->getQueryString() ?? '',
+        ], $rendered);
+
         $response = response($rendered['html'], 200)
             ->header('Content-Type', 'text/html; charset=UTF-8')
             ->header('X-NewTXT-Cache', $this->cacheHeader($rendered))

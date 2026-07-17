@@ -464,6 +464,7 @@ class SeoMiddlewareIntegrationTest extends TestCase
         config()->set('newtxt.api_key', 'api-site-key');
         config()->set('newtxt.account_settings_cache_ttl', 0);
         config()->set('newtxt.cache_ttl', 86400);
+        config()->set('newtxt.refresh_rendered_pages_after_local_hit', false);
 
         Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
             return response('<html><head><title>Source</title></head><body><main>Source</main></body></html>', 200)
@@ -517,6 +518,145 @@ class SeoMiddlewareIntegrationTest extends TestCase
             $secondResponse->assertHeader('X-NewTXT-Cache', 'local-hit');
             $secondResponse->assertSee('Bonjour from local snapshot', false);
             $secondResponse->assertDontSee('Unexpected remote render', false);
+            $this->assertSame(1, $renderRequests);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
+    }
+
+    public function test_local_rendered_page_hit_refreshes_remote_snapshot_after_response(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-refresh-' . bin2hex(random_bytes(6));
+        $renderRequests = 0;
+        $settings = [
+            'siteId' => '00000000-0000-0000-0000-000000000011',
+            'publicKey' => 'public-site-key',
+            'sourceLanguage' => 'en',
+            'defaultUrlMode' => 'path',
+            'navigationMode' => 'redirect',
+            'translationMode' => 'seo',
+            'cacheTranslatedPages' => true,
+            'targetLanguages' => [
+                ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+            ],
+        ];
+
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 86400);
+        config()->set('newtxt.rendered_page_refresh_ttl', 300);
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source</title></head><body><main>Source</main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        try {
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response($settings),
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                    $renderRequests++;
+
+                    return Http::response([
+                        'siteId' => '00000000-0000-0000-0000-000000000011',
+                        'languageCode' => 'fr',
+                        'path' => '/about',
+                        'urlMode' => 'path',
+                        'translatedUrl' => 'https://example.test/fr/about',
+                        'fromCache' => false,
+                        'html' => $renderRequests === 1
+                            ? '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1><p>Local snapshot copy</p></main></body></html>'
+                            : '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour updated</title></head><body><main><h1>Bonjour</h1><p>Refreshed snapshot copy</p></main></body></html>',
+                    ]);
+                },
+            ]);
+
+            $firstResponse = $this->get('/fr/about');
+            $firstResponse->assertOk();
+            $firstResponse->assertSee('Local snapshot copy', false);
+            $this->assertSame(1, $renderRequests);
+
+            Cache::flush();
+
+            $secondResponse = $this->get('/fr/about');
+            $secondResponse->assertOk();
+            $secondResponse->assertHeader('X-NewTXT-Cache', 'local-hit');
+            $secondResponse->assertSee('Local snapshot copy', false);
+            $secondResponse->assertDontSee('Refreshed snapshot copy', false);
+            $this->assertSame(2, $renderRequests);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
+    }
+
+    public function test_page_rule_can_disable_local_hit_refresh(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-refresh-disabled-' . bin2hex(random_bytes(6));
+        $renderRequests = 0;
+        $settings = [
+            'siteId' => '00000000-0000-0000-0000-000000000012',
+            'publicKey' => 'public-site-key',
+            'sourceLanguage' => 'en',
+            'defaultUrlMode' => 'path',
+            'navigationMode' => 'redirect',
+            'translationMode' => 'seo',
+            'cacheTranslatedPages' => true,
+            'targetLanguages' => [
+                ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+            ],
+            'pageRules' => [
+                [
+                    'path' => '/about',
+                    'isExcludedFromSitemap' => false,
+                    'redirectTargetUrl' => null,
+                    'disableContentRefresh' => true,
+                ],
+            ],
+        ];
+
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 86400);
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source</title></head><body><main>Source</main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        try {
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response($settings),
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                    $renderRequests++;
+
+                    return Http::response([
+                        'siteId' => '00000000-0000-0000-0000-000000000012',
+                        'languageCode' => 'fr',
+                        'path' => '/about',
+                        'urlMode' => 'path',
+                        'translatedUrl' => 'https://example.test/fr/about',
+                        'fromCache' => false,
+                        'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1><p>Frozen snapshot copy</p></main></body></html>',
+                    ]);
+                },
+            ]);
+
+            $firstResponse = $this->get('/fr/about');
+            $firstResponse->assertOk();
+            $this->assertSame(1, $renderRequests);
+
+            Cache::flush();
+
+            $secondResponse = $this->get('/fr/about');
+            $secondResponse->assertOk();
+            $secondResponse->assertHeader('X-NewTXT-Cache', 'local-hit');
+            $secondResponse->assertSee('Frozen snapshot copy', false);
             $this->assertSame(1, $renderRequests);
         } finally {
             (new Filesystem())->deleteDirectory($storagePath);

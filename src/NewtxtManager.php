@@ -128,6 +128,54 @@ class NewtxtManager
     }
 
     /**
+     * Refresh a locally served translated page after the response is sent.
+     */
+    public function queueRenderedPageRefresh(string $languageCode, string $path, array $options = [], array $rendered = []): void
+    {
+        if (
+            !(bool) $this->config->get('newtxt.refresh_rendered_pages_after_local_hit', true)
+            || !$this->canRenderTranslatedPages()
+            || !$this->isLocalRenderedPage($rendered)
+            || $this->contentRefreshDisabledForPath($path)
+        ) {
+            return;
+        }
+
+        $languageCode = $this->normalizeLanguageCode($languageCode);
+        $path = $this->normalizePath($path);
+        $urlMode = (string) ($options['urlMode'] ?? $rendered['urlMode'] ?? $this->urlMode());
+        $query = (string) ($options['query'] ?? $rendered['query'] ?? '');
+        $ttl = max(0, (int) $this->config->get('newtxt.rendered_page_refresh_ttl', 300));
+
+        if ($ttl > 0) {
+            $key = implode(':', [
+                trim((string) $this->config->get('newtxt.cache_prefix', 'newtxt:rendered-pages'), ':'),
+                'refresh',
+                sha1(implode('|', [
+                    $this->siteId() ?: $this->publicKey(),
+                    $languageCode,
+                    $urlMode,
+                    $path,
+                    $query,
+                    (string) ($rendered['pageHash'] ?? ''),
+                ])),
+            ]);
+
+            if (!$this->cacheStore()->add($key, gmdate('c'), $ttl)) {
+                return;
+            }
+        }
+
+        app()->terminating(function () use ($languageCode, $path, $options, $urlMode): void {
+            $this->renderPage($languageCode, $path, array_merge($options, [
+                'urlMode' => $urlMode,
+                'forceRefreshCache' => true,
+                'autoTranslateIfMissing' => true,
+            ]));
+        });
+    }
+
+    /**
      * Clear local translated HTML cache.
      *
      * Laravel cache stores do not support safe prefix deletes consistently. The
@@ -447,6 +495,25 @@ class NewtxtManager
     public function canRenderTranslatedPages(): bool
     {
         return $this->canServeTranslatedPages() && $this->hasServerCredentials();
+    }
+
+    /**
+     * Return true when account settings freeze content discovery for a path.
+     */
+    public function contentRefreshDisabledForPath(string $path): bool
+    {
+        if ($this->boolAccountValue([
+            'disableContentRefresh',
+            'widgetSettings.disableContentRefresh',
+            'settings.disableContentRefresh',
+        ], false)) {
+            return true;
+        }
+
+        $path = $this->normalizePath($path);
+        $rule = $this->pageRules()[$path] ?? null;
+
+        return is_array($rule) && filter_var($rule['disableContentRefresh'] ?? false, FILTER_VALIDATE_BOOL) === true;
     }
 
     /**
@@ -1233,6 +1300,16 @@ class NewtxtManager
     }
 
     /**
+     * Return true when rendered HTML came from local project storage.
+     */
+    private function isLocalRenderedPage(array $rendered): bool
+    {
+        return in_array($rendered['cacheSource'] ?? null, ['local-snapshot', 'laravel-cache'], true)
+            || ($rendered['fromLocalSnapshot'] ?? false) === true
+            || ($rendered['fromLocalCache'] ?? false) === true;
+    }
+
+    /**
      * Return whether account settings allow public translation surfaces.
      */
     private function widgetEnabled(): bool
@@ -1537,7 +1614,7 @@ class NewtxtManager
     /**
      * Return account-managed page rules keyed by normalized source path.
      *
-     * @return array<string,array{isExcludedFromSitemap:bool,redirectTargetUrl:?string}>
+     * @return array<string,array{isExcludedFromSitemap:bool,redirectTargetUrl:?string,disableContentRefresh:bool}>
      */
     private function pageRules(): array
     {
@@ -1557,6 +1634,7 @@ class NewtxtManager
             $normalizedRules[$path] = [
                 'isExcludedFromSitemap' => filter_var($rule['isExcludedFromSitemap'] ?? false, FILTER_VALIDATE_BOOL),
                 'redirectTargetUrl' => isset($rule['redirectTargetUrl']) ? trim((string) $rule['redirectTargetUrl']) : null,
+                'disableContentRefresh' => filter_var($rule['disableContentRefresh'] ?? false, FILTER_VALIDATE_BOOL),
             ];
         }
 

@@ -9,6 +9,7 @@ use Newtxt\Laravel\NewtxtManager;
  * @method static string widgetSnippet(array $attributes = [])
  * @method static array|null renderPage(string $languageCode, string $path, array $options = [])
  * @method static array|null rememberRenderedPage(string $languageCode, string $path, array $options = [])
+ * @method static void queueRenderedPageRefresh(string $languageCode, string $path, array $options = [], array $rendered = [])
  * @method static void clearRenderedPageCache(?string $languageCode = null, ?string $path = null)
  * @method static int syncHashedTranslations(string $languageCode, string $path, array $options = [])
  * @method static array putHashedTranslation(string $languageCode, string $sourceText, string $translatedText, array $metadata = [])
@@ -21,6 +22,7 @@ use Newtxt\Laravel\NewtxtManager;
  * @method static array accountSettings(bool $forceRefresh = false)
  * @method static array targetLanguages()
  * @method static bool isRenderedPageReady(array $rendered, ?string $languageCode = null)
+ * @method static bool contentRefreshDisabledForPath(string $path)
  */
 class Newtxt extends Facade
 {

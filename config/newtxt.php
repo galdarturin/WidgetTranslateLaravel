@@ -82,6 +82,8 @@ return [
     'cache_store' => null,
     'cache_ttl' => 86400,
     'cache_prefix' => 'newtxt:rendered-pages',
+    'refresh_rendered_pages_after_local_hit' => true,
+    'rendered_page_refresh_ttl' => 300,
 
     /*
     |--------------------------------------------------------------------------
