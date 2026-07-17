@@ -299,15 +299,10 @@ class NewtxtManager
      */
     public function sitemapEntries(array $sourceEntries, ?string $siteUrl = null, array $options = []): array
     {
-        $entries = array_values($sourceEntries);
-        if (!$this->canServeTranslatedPages()) {
-            return $entries;
-        }
-
-        $languages = $this->sitemapLanguages($options['languages'] ?? null);
-        if ($languages === []) {
-            return $entries;
-        }
+        $entries = array_values(array_filter(
+            $sourceEntries,
+            fn ($entry) => is_array($entry) && $this->isSitemapEntryAllowed($entry),
+        ));
 
         $baseSiteUrl = $this->normalizeSitemapSiteUrl($siteUrl ?? $this->config->get('app.url'));
         if ($baseSiteUrl === null) {
@@ -324,7 +319,6 @@ class NewtxtManager
         }
 
         foreach ($this->renderedPageSitemapEntries($baseSiteUrl, array_merge($options, [
-            'languages' => $languages,
             'urlMode' => $urlMode,
         ])) as $entry) {
             $loc = (string) ($entry['loc'] ?? '');
@@ -352,14 +346,20 @@ class NewtxtManager
      */
     public function renderedPageSitemapEntries(?string $siteUrl = null, array $options = []): array
     {
-        if (!$this->canServeTranslatedPages()) {
+        if (!$this->enabled()) {
+            return [];
+        }
+
+        $autoRemoveUnavailable = $this->autoRemoveUnavailableSitemapPages();
+        if ($autoRemoveUnavailable && !$this->canServeTranslatedPages()) {
             return [];
         }
 
         $languages = $this->sitemapLanguages($options['languages'] ?? null);
-        if ($languages === []) {
+        if ($languages === [] && ($autoRemoveUnavailable || array_key_exists('languages', $options))) {
             return [];
         }
+        $languageFilter = $languages === [] ? null : $languages;
 
         $siteId = trim((string) ($options['siteId'] ?? $this->siteId()));
         if ($siteId === '') {
@@ -374,7 +374,7 @@ class NewtxtManager
         }
 
         $entries = [];
-        foreach ($this->snapshots->allForSitemap($siteId, $languages) as $snapshot) {
+        foreach ($this->snapshots->allForSitemap($siteId, $languageFilter) as $snapshot) {
             if (
                 ($snapshot['translationReady'] ?? false) !== true
                 || (string) ($snapshot['pageHashVersion'] ?? '') !== $this->pageHashVersion()
@@ -383,7 +383,7 @@ class NewtxtManager
             }
 
             $languageCode = $this->normalizeLanguageCode((string) ($snapshot['languageCode'] ?? ''));
-            if (!in_array($languageCode, $languages, true)) {
+            if ($languageFilter !== null && !in_array($languageCode, $languageFilter, true)) {
                 continue;
             }
 
@@ -398,7 +398,11 @@ class NewtxtManager
             }
 
             $path = $this->normalizePath((string) ($snapshot['path'] ?? '/'));
-            if (!$this->isSitemapPathAllowed($path)) {
+            if ($this->isExplicitlyExcludedFromSitemap($path)) {
+                continue;
+            }
+
+            if ($autoRemoveUnavailable && !$this->isSitemapRuntimePathAllowed($path)) {
                 continue;
             }
 
@@ -432,6 +436,7 @@ class NewtxtManager
     public function canServeTranslatedPages(): bool
     {
         return $this->enabled()
+            && $this->widgetEnabled()
             && $this->translationMode() === 'seo'
             && $this->targetLanguages() !== [];
     }
@@ -442,6 +447,37 @@ class NewtxtManager
     public function canRenderTranslatedPages(): bool
     {
         return $this->canServeTranslatedPages() && $this->hasServerCredentials();
+    }
+
+    /**
+     * Return an account-managed redirect target for a source path.
+     */
+    public function redirectTargetForPath(string $path): ?string
+    {
+        $path = $this->normalizePath($path);
+        $rule = $this->pageRules()[$path] ?? null;
+        if (!is_array($rule)) {
+            return null;
+        }
+
+        $target = trim((string) ($rule['redirectTargetUrl'] ?? ''));
+        if ($target === '') {
+            return null;
+        }
+
+        if (str_starts_with($target, '/')) {
+            $target = $this->normalizePath($target);
+            return $target === $path ? null : $target;
+        }
+
+        $parts = parse_url($target);
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        return $target;
     }
 
     /**
@@ -1185,6 +1221,26 @@ class NewtxtManager
     }
 
     /**
+     * Return whether unavailable translated pages may be removed from sitemap output automatically.
+     */
+    private function autoRemoveUnavailableSitemapPages(): bool
+    {
+        return $this->boolAccountValue([
+            'autoRemoveUnavailableSitemapPages',
+            'widgetSettings.autoRemoveUnavailableSitemapPages',
+            'settings.autoRemoveUnavailableSitemapPages',
+        ], false);
+    }
+
+    /**
+     * Return whether account settings allow public translation surfaces.
+     */
+    private function widgetEnabled(): bool
+    {
+        return $this->boolAccountValue(['widgetEnabled', 'widgetSettings.enabled', 'settings.enabled'], true);
+    }
+
+    /**
      * Return whether local SEO metadata injection is enabled.
      */
     private function injectSeoMetadata(): bool
@@ -1211,15 +1267,18 @@ class NewtxtManager
      */
     public function targetLanguages(): array
     {
-        $languages = $this->normalizeLanguageList($this->firstAccountValue([
+        $accountKeys = [
             'targetLanguages',
             'site.targetLanguages',
             'languages',
             'settings.targetLanguages',
-        ], []), true);
+        ];
 
-        if ($languages !== []) {
-            return $languages;
+        $settings = $this->accountSettings();
+        foreach ($accountKeys as $key) {
+            if (Arr::has($settings, $key)) {
+                return $this->normalizeLanguageList(Arr::get($settings, $key), true);
+            }
         }
 
         return $this->normalizeLanguageList($this->config->get('newtxt.target_languages', []));
@@ -1286,8 +1345,33 @@ class NewtxtManager
                         return null;
                     }
 
-                    $isActive = $language['isActive'] ?? $language['active'] ?? true;
-                    if (filter_var($isActive, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === false) {
+                    foreach ([
+                        'active',
+                        'available',
+                        'configured',
+                        'enabled',
+                        'isActive',
+                        'isAvailable',
+                        'isConfigured',
+                        'isEnabled',
+                        'isPublished',
+                        'isRoutable',
+                        'published',
+                        'routable',
+                    ] as $flag) {
+                        if (array_key_exists($flag, $language) && filter_var($language[$flag], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === false) {
+                            return null;
+                        }
+                    }
+
+                    foreach (['deleted', 'disabled', 'isDeleted', 'isDisabled', 'isPaused', 'paused'] as $flag) {
+                        if (filter_var($language[$flag] ?? false, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true) {
+                            return null;
+                        }
+                    }
+
+                    $status = strtolower(trim((string) ($language['status'] ?? $language['translationStatus'] ?? $language['state'] ?? '')));
+                    if (in_array($status, ['archived', 'blocked', 'deleted', 'disabled', 'error', 'failed', 'inactive', 'paused', 'unavailable'], true)) {
                         return null;
                     }
 
@@ -1409,8 +1493,15 @@ class NewtxtManager
         return $this->normalizePath($path);
     }
 
-    private function isSitemapPathAllowed(string $path): bool
+    private function isSitemapEntryAllowed(array $entry): bool
     {
+        $path = $this->sitemapEntryPath($entry);
+        return $path === null || !$this->isExplicitlyExcludedFromSitemap($path);
+    }
+
+    private function isSitemapRuntimePathAllowed(string $path): bool
+    {
+        $path = $this->normalizePath($path);
         $normalized = strtolower(ltrim($path, '/'));
         $patterns = (array) $this->config->get('newtxt.excluded_paths', [
             'admin*',
@@ -1433,6 +1524,43 @@ class NewtxtManager
         }
 
         return true;
+    }
+
+    private function isExplicitlyExcludedFromSitemap(string $path): bool
+    {
+        $path = $this->normalizePath($path);
+        $rule = $this->pageRules()[$path] ?? null;
+
+        return is_array($rule) && filter_var($rule['isExcludedFromSitemap'] ?? false, FILTER_VALIDATE_BOOL) === true;
+    }
+
+    /**
+     * Return account-managed page rules keyed by normalized source path.
+     *
+     * @return array<string,array{isExcludedFromSitemap:bool,redirectTargetUrl:?string}>
+     */
+    private function pageRules(): array
+    {
+        $settings = $this->accountSettings();
+        $rules = Arr::get($settings, 'pageRules', []);
+        if (!is_array($rules)) {
+            return [];
+        }
+
+        $normalizedRules = [];
+        foreach ($rules as $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            $path = $this->normalizePath((string) ($rule['path'] ?? ''));
+            $normalizedRules[$path] = [
+                'isExcludedFromSitemap' => filter_var($rule['isExcludedFromSitemap'] ?? false, FILTER_VALIDATE_BOOL),
+                'redirectTargetUrl' => isset($rule['redirectTargetUrl']) ? trim((string) $rule['redirectTargetUrl']) : null,
+            ];
+        }
+
+        return $normalizedRules;
     }
 
     private function sitemapLastModified(mixed $value): string

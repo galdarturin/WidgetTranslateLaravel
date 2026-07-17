@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Newtxt\Laravel\NewtxtManager;
+use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
 use Newtxt\Laravel\Tests\TestCase;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -97,6 +98,171 @@ class SeoMiddlewareIntegrationTest extends TestCase
         $this->assertNotContains('https://example.test/de/about', $locations);
 
         Http::assertNothingSent();
+    }
+
+    public function test_sitemap_entries_keep_ready_snapshots_when_account_disables_targets_by_default(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-disabled-sitemap-' . bin2hex(random_bytes(6));
+        $siteId = '00000000-0000-0000-0000-000000000050';
+
+        config()->set('app.url', 'https://example.test');
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.target_languages', 'fr');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+
+        try {
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                    'siteId' => $siteId,
+                    'publicKey' => 'public-site-key',
+                    'sourceLanguage' => 'en',
+                    'defaultUrlMode' => 'path',
+                    'navigationMode' => 'redirect',
+                    'translationMode' => 'seo',
+                    'cacheTranslatedPages' => true,
+                    'widgetSettings' => [
+                        'enabled' => true,
+                        'translationMode' => 'seo',
+                        'defaultUrlMode' => 'path',
+                        'cacheTranslatedPages' => true,
+                    ],
+                    'targetLanguages' => [
+                        ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false, 'isActive' => false],
+                    ],
+                ]),
+            ]);
+
+            app(RenderedPageSnapshotStore::class)->put([
+                'siteId' => $siteId,
+                'languageCode' => 'fr',
+                'path' => '/about',
+                'urlMode' => 'path',
+                'query' => '',
+                'pageHash' => 'ready-fr-about',
+                'pageHashVersion' => 'newtxt-laravel-v3',
+                'translationReady' => true,
+                'htmlHash' => 'ready-html-hash',
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr" lang="fr"><head><title>Bonjour</title><meta name="description" content="Bonjour description"><link rel="canonical" href="https://example.test/fr/about"><link rel="alternate" href="https://example.test/fr/about" hreflang="fr"></head><body><main><h1>Bonjour</h1><p>Bonjour translated page.</p></main></body></html>',
+            ], true);
+
+            $entries = app(NewtxtManager::class)->sitemapEntries([
+                [
+                    'loc' => 'https://example.test/about',
+                    'lastmod' => '2026-07-15T00:00:00+00:00',
+                    'changefreq' => 'weekly',
+                    'priority' => '0.7',
+                ],
+            ], 'https://example.test', ['urlMode' => 'path']);
+
+            $locations = array_column($entries, 'loc');
+
+            $this->assertContains('https://example.test/about', $locations);
+            $this->assertContains('https://example.test/fr/about', $locations);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
+    }
+
+    public function test_sitemap_entries_auto_remove_unavailable_snapshots_when_enabled(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-auto-clean-sitemap-' . bin2hex(random_bytes(6));
+        $siteId = '00000000-0000-0000-0000-000000000051';
+
+        config()->set('app.url', 'https://example.test');
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.target_languages', 'fr');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+
+        try {
+            Http::fake([
+                'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                    'siteId' => $siteId,
+                    'publicKey' => 'public-site-key',
+                    'sourceLanguage' => 'en',
+                    'defaultUrlMode' => 'path',
+                    'navigationMode' => 'redirect',
+                    'translationMode' => 'seo',
+                    'cacheTranslatedPages' => true,
+                    'widgetSettings' => [
+                        'enabled' => true,
+                        'translationMode' => 'seo',
+                        'defaultUrlMode' => 'path',
+                        'cacheTranslatedPages' => true,
+                        'autoRemoveUnavailableSitemapPages' => true,
+                    ],
+                    'targetLanguages' => [
+                        ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false, 'isActive' => false],
+                    ],
+                ]),
+            ]);
+
+            app(RenderedPageSnapshotStore::class)->put([
+                'siteId' => $siteId,
+                'languageCode' => 'fr',
+                'path' => '/about',
+                'urlMode' => 'path',
+                'query' => '',
+                'pageHash' => 'ready-fr-about',
+                'pageHashVersion' => 'newtxt-laravel-v3',
+                'translationReady' => true,
+                'htmlHash' => 'ready-html-hash',
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr" lang="fr"><head><title>Bonjour</title><meta name="description" content="Bonjour description"><link rel="canonical" href="https://example.test/fr/about"><link rel="alternate" href="https://example.test/fr/about" hreflang="fr"></head><body><main><h1>Bonjour</h1><p>Bonjour translated page.</p></main></body></html>',
+            ], true);
+
+            $entries = app(NewtxtManager::class)->sitemapEntries([
+                [
+                    'loc' => 'https://example.test/about',
+                    'lastmod' => '2026-07-15T00:00:00+00:00',
+                    'changefreq' => 'weekly',
+                    'priority' => '0.7',
+                ],
+            ], 'https://example.test', ['urlMode' => 'path']);
+
+            $locations = array_column($entries, 'loc');
+
+            $this->assertContains('https://example.test/about', $locations);
+            $this->assertNotContains('https://example.test/fr/about', $locations);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
+    }
+
+    public function test_rendered_page_sitemap_entries_skip_snapshots_without_stored_html(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-missing-html-sitemap-' . bin2hex(random_bytes(6));
+        $siteId = '00000000-0000-0000-0000-000000000060';
+
+        config()->set('app.url', 'https://example.test');
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.site_id', $siteId);
+        config()->set('newtxt.target_languages', 'fr');
+
+        try {
+            app(RenderedPageSnapshotStore::class)->put([
+                'siteId' => $siteId,
+                'languageCode' => 'fr',
+                'path' => '/about',
+                'urlMode' => 'path',
+                'query' => '',
+                'pageHash' => 'ready-fr-without-html',
+                'pageHashVersion' => 'newtxt-laravel-v3',
+                'translationReady' => true,
+                'htmlHash' => 'ready-html-hash',
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Bonjour</title></head><body><main><h1>Bonjour</h1><p>Bonjour translated page.</p></main></body></html>',
+            ], false);
+
+            $entries = app(NewtxtManager::class)->renderedPageSitemapEntries('https://example.test', ['urlMode' => 'path']);
+
+            $this->assertSame([], $entries);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
     }
 
     public function test_env_config_widget_directive_and_seo_middleware_work_together(): void

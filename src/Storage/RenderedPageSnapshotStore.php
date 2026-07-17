@@ -133,7 +133,7 @@ class RenderedPageSnapshotStore
                     }
 
                     $metadata = $this->readJson($file->getPathname());
-                    if (!$this->isSitemapSnapshot($metadata)) {
+                    if (!$this->isSitemapSnapshot($metadata, $languageDirectory)) {
                         continue;
                     }
 
@@ -251,13 +251,20 @@ class RenderedPageSnapshotStore
         return $filter;
     }
 
-    private function isSitemapSnapshot(?array $metadata): bool
+    private function isSitemapSnapshot(?array $metadata, string $languageDirectory): bool
     {
+        $htmlPath = trim((string) ($metadata['htmlPath'] ?? ''));
+        $htmlFullPath = $htmlPath !== '' ? $languageDirectory . '/' . basename($htmlPath) : '';
+
         return is_array($metadata) &&
             trim((string) ($metadata['pageHash'] ?? '')) !== '' &&
             trim((string) ($metadata['languageCode'] ?? '')) !== '' &&
             trim((string) ($metadata['path'] ?? '')) !== '' &&
-            trim((string) ($metadata['urlMode'] ?? '')) !== '';
+            trim((string) ($metadata['urlMode'] ?? '')) !== '' &&
+            ($metadata['htmlStored'] ?? false) === true &&
+            $htmlFullPath !== '' &&
+            $this->files->exists($htmlFullPath) &&
+            trim((string) $this->files->get($htmlFullPath)) !== '';
     }
 
     /**

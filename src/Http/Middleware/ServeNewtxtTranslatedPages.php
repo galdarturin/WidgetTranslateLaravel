@@ -30,6 +30,15 @@ class ServeNewtxtTranslatedPages
         }
 
         $translationContext = $this->translatedRequestContext($request);
+        $redirectTarget = $this->newtxt->redirectTargetForPath('/' . ltrim($request->path(), '/'));
+        if ($redirectTarget === null && $translationContext !== null) {
+            $redirectTarget = $this->newtxt->redirectTargetForPath($translationContext[1]);
+        }
+
+        if ($redirectTarget !== null) {
+            return response('', 301)->header('Location', $redirectTarget);
+        }
+
         if ($translationContext === null) {
             $response = $next($request);
             $this->recordSourceResponse($request, $response);

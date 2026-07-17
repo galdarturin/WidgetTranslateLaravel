@@ -204,7 +204,7 @@ Applications provide their source sitemap entries and let the package build the 
 $entries = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMode' => 'path']);
 ```
 
-The package reads target languages from NewTXT account settings or local fallback config, but publishes a translated sitemap location only after a complete canonical rendered-page snapshot has been stored for that language and path. Merely configuring a language no longer publishes every possible translated URL. Query-string snapshots and incomplete or older-version snapshots are excluded.
+The package reads target languages from NewTXT account settings or local fallback config, but publishes a translated sitemap location only after a complete canonical rendered-page snapshot has been stored for that language and path. By default, existing ready snapshot URLs are not removed from sitemap output just because widget translation is later disabled, a target language is disabled, or a path is excluded from widget runtime. NewTXT dashboard users can opt in to automatic sitemap cleanup for unavailable translated pages. Explicit page-level "remove from sitemap" rules always apply. Query-string snapshots, snapshots without stored HTML, and incomplete or older-version snapshots are excluded.
 
 ## SEO Metadata
 

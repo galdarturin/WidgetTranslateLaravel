@@ -79,6 +79,97 @@ class AccountSettingsTest extends TestCase
         $this->assertNull($manager->extractLanguageFromPath('/fr/about'));
     }
 
+    public function test_account_page_rules_filter_sitemap_entries_and_resolve_redirects(): void
+    {
+        config()->set('newtxt.public_key', 'site-rules-public-key');
+        config()->set('newtxt.private_key', 'site-rules-private-key');
+        config()->set('newtxt.api_key', 'site-rules-api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000010',
+                'publicKey' => 'site-rules-public-key',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'navigationMode' => 'redirect',
+                'translationMode' => 'seo',
+                'cacheTranslatedPages' => true,
+                'widgetSettings' => [
+                    'enabled' => true,
+                    'translationMode' => 'seo',
+                    'defaultUrlMode' => 'path',
+                    'cacheTranslatedPages' => true,
+                ],
+                'targetLanguages' => [],
+                'pageRules' => [
+                    [
+                        'path' => '/old-page',
+                        'isExcludedFromSitemap' => true,
+                        'redirectTargetUrl' => '/new-page',
+                    ],
+                ],
+            ]),
+        ]);
+
+        $manager = app(NewtxtManager::class);
+        $entries = $manager->sitemapEntries([
+            [
+                'loc' => 'https://example.test/old-page',
+                'lastmod' => '2026-07-17T00:00:00+00:00',
+                'changefreq' => 'weekly',
+                'priority' => '0.7',
+            ],
+            [
+                'loc' => 'https://example.test/keep-page',
+                'lastmod' => '2026-07-17T00:00:00+00:00',
+                'changefreq' => 'weekly',
+                'priority' => '0.7',
+            ],
+        ], 'https://example.test');
+
+        $this->assertSame('/new-page', $manager->redirectTargetForPath('/old-page'));
+        $this->assertSame(['https://example.test/keep-page'], array_column($entries, 'loc'));
+    }
+
+    public function test_widget_runtime_excluded_paths_do_not_filter_source_sitemap_entries_by_default(): void
+    {
+        config()->set('newtxt.excluded_paths', ['private*']);
+        config()->set('newtxt.public_key', 'site-runtime-exclusions-public-key');
+        config()->set('newtxt.private_key', 'site-runtime-exclusions-private-key');
+        config()->set('newtxt.api_key', 'site-runtime-exclusions-api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000011',
+                'publicKey' => 'site-runtime-exclusions-public-key',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'navigationMode' => 'redirect',
+                'translationMode' => 'seo',
+                'cacheTranslatedPages' => true,
+                'widgetSettings' => [
+                    'enabled' => true,
+                    'translationMode' => 'seo',
+                    'defaultUrlMode' => 'path',
+                    'cacheTranslatedPages' => true,
+                    'excludedPaths' => ['/private'],
+                ],
+                'targetLanguages' => [],
+            ]),
+        ]);
+
+        $entries = app(NewtxtManager::class)->sitemapEntries([
+            [
+                'loc' => 'https://example.test/private',
+                'lastmod' => '2026-07-17T00:00:00+00:00',
+                'changefreq' => 'weekly',
+                'priority' => '0.7',
+            ],
+        ], 'https://example.test');
+
+        $this->assertSame(['https://example.test/private'], array_column($entries, 'loc'));
+    }
+
     public function test_hashed_translations_use_account_site_scope_without_env_site_id(): void
     {
         $storagePath = sys_get_temp_dir() . '/newtxt-laravel-test-' . bin2hex(random_bytes(6));
