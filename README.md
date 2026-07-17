@@ -148,6 +148,8 @@ Rendered HTML is stored in the Laravel cache store and as a project-local HTML s
 
 Sitemap prewarm accepts only public `http` and `https` URLs and blocks localhost, private IP, and reserved IP targets. The package does not crawl websites or generate translations by itself; it uses sitemap URLs only to collect source paths and then calls the NewTXT API for rendered pages and translated nodes. If the host does not already expose a sitemap, use request-time rendering, NewTXT dashboard discovery, or signed service callbacks instead of building a custom sitemap solely for this integration.
 
+The hosted widget runtime keeps dynamic text translation and image text translation on separate request paths. Dynamic page text is prioritized first; image text translation remains a heavier NewTXT/CDN flow and starts after the text translation queue settles.
+
 ## Hashed Translation Store
 
 ```bash
