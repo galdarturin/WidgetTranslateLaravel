@@ -100,8 +100,8 @@ class NewtxtCallbackController extends Controller
         [$languageCode, $path] = $this->languageAndPath($data);
         $rendered = $this->newtxt->rememberRenderedPage($languageCode, $path, $this->safeOptions($data));
 
-        if (!is_array($rendered) || !isset($rendered['html'])) {
-            throw new CallbackValidationException('Translated page could not be rendered');
+        if (!is_array($rendered) || !$this->newtxt->isRenderedPageReady($rendered, $languageCode)) {
+            throw new CallbackValidationException('Translated page is not ready');
         }
 
         return [

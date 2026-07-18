@@ -10,6 +10,7 @@ use Illuminate\Support\ServiceProvider;
 use Newtxt\Laravel\Console\ClearCacheCommand;
 use Newtxt\Laravel\Console\InstallCommand;
 use Newtxt\Laravel\Console\PrewarmCommand;
+use Newtxt\Laravel\Console\PruneStorageCommand;
 use Newtxt\Laravel\Console\SyncTranslationsCommand;
 use Newtxt\Laravel\Html\PageHasher;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
@@ -42,7 +43,14 @@ class NewtxtServiceProvider extends ServiceProvider
 
         $this->app->singleton(PageHasher::class);
         $this->app->singleton(SeoMetadataInjector::class);
-        $this->app->singleton(CallbackSignatureVerifier::class);
+        $this->app->singleton(CallbackSignatureVerifier::class, function ($app) {
+            $store = config('newtxt.callback_cache_store');
+
+            return new CallbackSignatureVerifier(
+                $app->make('config'),
+                $store ? $app['cache']->store($store) : $app['cache']->store(),
+            );
+        });
         $this->app->singleton(HashedTranslationStore::class, function ($app) {
             return new HashedTranslationStore(
                 $app->make(Filesystem::class),
@@ -94,6 +102,7 @@ class NewtxtServiceProvider extends ServiceProvider
             $this->commands([
                 InstallCommand::class,
                 PrewarmCommand::class,
+                PruneStorageCommand::class,
                 SyncTranslationsCommand::class,
                 ClearCacheCommand::class,
             ]);

@@ -69,6 +69,11 @@ class NewtxtClient
             'allowPartialTranslations' => (bool) ($options['allowPartialTranslations'] ?? false),
         ];
 
+        $query = ltrim(trim((string) ($options['query'] ?? '')), '?');
+        if ($query !== '') {
+            $payload['query'] = $query;
+        }
+
         return $this->post('/localization/integrations/laravel/pages/render', $payload);
     }
 
@@ -88,6 +93,11 @@ class NewtxtClient
             'includeHtml' => (bool) ($options['includeHtml'] ?? false),
             'allowPartialHtml' => (bool) ($options['allowPartialHtml'] ?? false),
         ];
+
+        $renderQuery = ltrim(trim((string) ($options['query'] ?? '')), '?');
+        if ($renderQuery !== '') {
+            $query['query'] = $renderQuery;
+        }
 
         return $this->get('/localization/integrations/laravel/pages/translations', $query);
     }

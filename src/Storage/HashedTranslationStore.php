@@ -93,6 +93,70 @@ class HashedTranslationStore
     }
 
     /**
+     * Report or delete hash-addressed translation entries older than the limit.
+     */
+    public function pruneStaleArtifacts(int $olderThanSeconds, bool $delete = false, ?string $siteId = null, ?array $languageCodes = null): array
+    {
+        $basePath = $this->basePath() . '/translations';
+        if (!$this->files->isDirectory($basePath)) {
+            return [
+                'scanned' => 0,
+                'stale' => 0,
+                'deleted' => 0,
+                'bytes' => 0,
+            ];
+        }
+
+        $cutoff = time() - max(0, $olderThanSeconds);
+        $sites = $siteId !== null && trim($siteId) !== ''
+            ? [$basePath . '/' . $this->siteId($siteId)]
+            : $this->files->directories($basePath);
+        $allowedLanguages = $this->languageFilter($languageCodes);
+        $summary = [
+            'scanned' => 0,
+            'stale' => 0,
+            'deleted' => 0,
+            'bytes' => 0,
+        ];
+
+        foreach ($sites as $siteDirectory) {
+            if (!$this->files->isDirectory($siteDirectory)) {
+                continue;
+            }
+
+            foreach ($this->files->directories($siteDirectory) as $languageDirectory) {
+                if ($allowedLanguages !== null && !isset($allowedLanguages[basename($languageDirectory)])) {
+                    continue;
+                }
+
+                foreach ($this->files->files($languageDirectory) as $file) {
+                    if (strtolower($file->getExtension()) !== 'json') {
+                        continue;
+                    }
+
+                    $summary['scanned']++;
+                    $metadata = json_decode($this->files->get($file->getPathname()), true);
+                    $updatedAt = is_array($metadata) ? strtotime((string) ($metadata['updatedAt'] ?? '')) : false;
+                    $lastChanged = $updatedAt !== false ? $updatedAt : $this->files->lastModified($file->getPathname());
+                    if ($lastChanged > $cutoff) {
+                        continue;
+                    }
+
+                    $summary['stale']++;
+                    $summary['bytes'] += $this->files->size($file->getPathname());
+
+                    if ($delete) {
+                        $this->files->delete($file->getPathname());
+                        $summary['deleted']++;
+                    }
+                }
+            }
+        }
+
+        return $summary;
+    }
+
+    /**
      * Build the full local path for a translation entry.
      */
     private function entryPath(string $languageCode, string $sourceHash, string $siteId): string
@@ -133,5 +197,26 @@ class HashedTranslationStore
     private function normalizeLanguageCode(string $languageCode): string
     {
         return preg_replace('/[^A-Za-z0-9_-]/', '_', strtolower(trim($languageCode))) ?: 'unknown';
+    }
+
+    /**
+     * @param  list<string>|null  $languageCodes
+     * @return array<string,true>|null
+     */
+    private function languageFilter(?array $languageCodes): ?array
+    {
+        if ($languageCodes === null) {
+            return null;
+        }
+
+        $filter = [];
+        foreach ($languageCodes as $languageCode) {
+            $normalized = $this->normalizeLanguageCode((string) $languageCode);
+            if ($normalized !== 'unknown') {
+                $filter[$normalized] = true;
+            }
+        }
+
+        return $filter;
     }
 }

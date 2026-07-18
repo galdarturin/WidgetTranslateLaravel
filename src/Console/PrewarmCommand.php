@@ -46,8 +46,9 @@ class PrewarmCommand extends Command
                 try {
                     $result = $newtxt->rememberRenderedPage($language, $path, [
                         'forceRefreshCache' => (bool) $this->option('force'),
+                        'syncHashedTranslationsOnRender' => false,
                     ]);
-                    if (is_array($result) && isset($result['html'])) {
+                    if (is_array($result) && $newtxt->isRenderedPageReady($result, $language)) {
                         $rendered++;
                         $this->line("Prewarmed {$language} {$path}");
                         if ($syncTranslations) {

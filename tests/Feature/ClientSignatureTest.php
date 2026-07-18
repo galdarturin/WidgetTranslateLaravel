@@ -73,6 +73,39 @@ class ClientSignatureTest extends TestCase
         });
     }
 
+    public function test_client_includes_explicit_render_query_in_signed_post_body(): void
+    {
+        config()->set('newtxt.public_key', 'public-key');
+        config()->set('newtxt.private_key', 'private-key');
+        config()->set('newtxt.api_key', 'api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
+                'html' => '<html><body>Bonjour</body></html>',
+            ]),
+        ]);
+
+        app(NewtxtClient::class)->renderPage('fr', '/vehicles', [
+            'urlMode' => 'path',
+            'query' => 'city=tbilisi&sort=price',
+        ]);
+
+        Http::assertSent(function ($request) {
+            $payload = json_decode($request->body(), true);
+            $timestamp = $request->header('X-NewTXT-Timestamp')[0] ?? '';
+            $expectedSignature = 'sha256=' . hash_hmac(
+                'sha256',
+                $timestamp . '.POST./localization/integrations/laravel/pages/render.' . $request->body(),
+                'private-key',
+            );
+
+            return $request->method() === 'POST'
+                && is_array($payload)
+                && ($payload['query'] ?? null) === 'city=tbilisi&sort=price'
+                && $request->hasHeader('X-NewTXT-Signature', $expectedSignature);
+        });
+    }
+
     public function test_client_signs_page_translation_sync_query_requests(): void
     {
         config()->set('newtxt.public_key', 'public-key');

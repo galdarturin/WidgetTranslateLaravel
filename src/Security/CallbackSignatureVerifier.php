@@ -2,14 +2,17 @@
 
 namespace Newtxt\Laravel\Security;
 
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Http\Request;
 use Newtxt\Laravel\Support\ConfigCredential;
 
 class CallbackSignatureVerifier
 {
-    public function __construct(private readonly ConfigRepository $config)
-    {
+    public function __construct(
+        private readonly ConfigRepository $config,
+        private readonly CacheRepository $cache,
+    ) {
     }
 
     /**
@@ -37,7 +40,11 @@ class CallbackSignatureVerifier
 
         $expected = hash_hmac('sha256', $timestamp . '.' . $request->getContent(), $secret);
 
-        return hash_equals($expected, $signature);
+        if (!hash_equals($expected, $signature)) {
+            return false;
+        }
+
+        return $this->markCallbackAsFresh($timestamp, $signature, $request->getContent());
     }
 
     /**
@@ -70,8 +77,31 @@ class CallbackSignatureVerifier
      */
     private function timestampIsFresh(string $timestamp): bool
     {
-        $tolerance = max(30, (int) $this->config->get('newtxt.callback_tolerance_seconds', 300));
+        $tolerance = $this->callbackToleranceSeconds();
 
         return abs(time() - (int) $timestamp) <= $tolerance;
+    }
+
+    /**
+     * Reserve a signed callback digest so it cannot be replayed.
+     */
+    private function markCallbackAsFresh(string $timestamp, string $signature, string $body): bool
+    {
+        if (!(bool) $this->config->get('newtxt.callback_replay_protection', true)) {
+            return true;
+        }
+
+        $prefix = trim((string) $this->config->get('newtxt.callback_replay_cache_prefix', 'newtxt:callback-replay'), ':');
+        $digest = sha1($timestamp . '.' . $signature . '.' . hash('sha256', $body));
+
+        return $this->cache->add($prefix . ':' . $digest, gmdate('c'), $this->callbackToleranceSeconds());
+    }
+
+    /**
+     * Return the accepted timestamp and replay window.
+     */
+    private function callbackToleranceSeconds(): int
+    {
+        return max(30, (int) $this->config->get('newtxt.callback_tolerance_seconds', 300));
     }
 }

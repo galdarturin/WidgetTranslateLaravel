@@ -587,6 +587,66 @@ class SeoMiddlewareIntegrationTest extends TestCase
             $secondResponse->assertSee('Local snapshot copy', false);
             $secondResponse->assertDontSee('Refreshed snapshot copy', false);
             $this->assertSame(2, $renderRequests);
+
+            config()->set('newtxt.refresh_rendered_pages_after_local_hit', false);
+
+            $thirdResponse = $this->get('/fr/about');
+            $thirdResponse->assertOk();
+            $thirdResponse->assertHeader('X-NewTXT-Cache', 'local-hit');
+            $thirdResponse->assertSee('Refreshed snapshot copy', false);
+            $thirdResponse->assertDontSee('Local snapshot copy', false);
+            $this->assertSame(2, $renderRequests);
+        } finally {
+            (new Filesystem())->deleteDirectory($storagePath);
+        }
+    }
+
+    public function test_unsupported_query_parameters_skip_translated_ssr_without_remote_render(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-query-skip-' . bin2hex(random_bytes(6));
+        $renderRequests = 0;
+
+        config()->set('app.url', 'https://example.test');
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000040',
+                'publicKey' => 'public-site-key',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'translationMode' => 'seo',
+                'targetLanguages' => [
+                    ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+                ],
+            ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => function () use (&$renderRequests) {
+                $renderRequests++;
+
+                return Http::response([
+                    'html' => '<html><body>Unexpected translated query page</body></html>',
+                ]);
+            },
+        ]);
+
+        try {
+            Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+                return response('<html><head><title>Source</title></head><body><main>Source query fallback</main></body></html>', 200)
+                    ->header('Content-Type', 'text/html; charset=UTF-8');
+            })->where('path', '.*');
+
+            $response = $this->get('/fr/vehicles?city=tbilisi');
+
+            $response->assertOk();
+            $response->assertHeaderMissing('X-NewTXT-Cache');
+            $response->assertHeader('X-NewTXT-Translation-Status', 'incomplete');
+            $response->assertSee('Source query fallback', false);
+            $response->assertDontSee('Unexpected translated query page', false);
+            $this->assertSame(0, $renderRequests);
         } finally {
             (new Filesystem())->deleteDirectory($storagePath);
         }

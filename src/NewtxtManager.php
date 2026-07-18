@@ -70,6 +70,11 @@ class NewtxtManager
             return null;
         }
 
+        $options = $this->normalizeRenderedPageOptions($options);
+        if ($options === null) {
+            return null;
+        }
+
         try {
             $rendered = $this->client->renderPage(
                 $this->normalizeLanguageCode($languageCode),
@@ -98,11 +103,20 @@ class NewtxtManager
 
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $path = $this->normalizePath($path);
+        $options = $this->normalizeRenderedPageOptions($options);
+        if ($options === null) {
+            return null;
+        }
+
         $cacheKey = $this->cacheKey($languageCode, $path, $options);
         $ttl = max(0, (int) $this->config->get('newtxt.cache_ttl', 86400));
 
-        if (!$this->cacheTranslatedPages() || $ttl === 0 || (bool) ($options['forceRefreshCache'] ?? false)) {
+        if (!$this->cacheTranslatedPages() || $ttl === 0) {
             return $this->renderPage($languageCode, $path, $options);
+        }
+
+        if ((bool) ($options['forceRefreshCache'] ?? false)) {
+            return $this->renderAndStoreRenderedPage($languageCode, $path, $options, $cacheKey, $ttl);
         }
 
         $store = $this->cacheStore();
@@ -143,9 +157,22 @@ class NewtxtManager
 
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $path = $this->normalizePath($path);
+        $options = $this->normalizeRenderedPageOptions($options);
+        if ($options === null) {
+            return;
+        }
+
         $urlMode = (string) ($options['urlMode'] ?? $rendered['urlMode'] ?? $this->urlMode());
         $query = (string) ($options['query'] ?? $rendered['query'] ?? '');
         $ttl = max(0, (int) $this->config->get('newtxt.rendered_page_refresh_ttl', 300));
+
+        if ($ttl > 0 && $this->renderedPageRefreshedWithin($rendered, $ttl)) {
+            return;
+        }
+
+        if ($ttl > 0 && ($rendered['fromLocalCache'] ?? false) === true && $this->renderedPageStoredWithin($rendered, $ttl)) {
+            return;
+        }
 
         if ($ttl > 0) {
             $key = implode(':', [
@@ -157,7 +184,7 @@ class NewtxtManager
                     $urlMode,
                     $path,
                     $query,
-                    (string) ($rendered['pageHash'] ?? ''),
+                    $this->pageHashVersion(),
                 ])),
             ]);
 
@@ -166,13 +193,45 @@ class NewtxtManager
             }
         }
 
-        app()->terminating(function () use ($languageCode, $path, $options, $urlMode): void {
-            $this->renderPage($languageCode, $path, array_merge($options, [
+        $ran = false;
+        app()->terminating(function () use (&$ran, $languageCode, $path, $options, $urlMode): void {
+            if ($ran) {
+                return;
+            }
+
+            $ran = true;
+            $this->rememberRenderedPage($languageCode, $path, array_merge($options, [
                 'urlMode' => $urlMode,
                 'forceRefreshCache' => true,
                 'autoTranslateIfMissing' => true,
             ]));
         });
+    }
+
+    /**
+     * Return true when a cached rendered page was stored inside the refresh window.
+     */
+    private function renderedPageStoredWithin(array $rendered, int $seconds): bool
+    {
+        $storedAt = strtotime((string) ($rendered['storedAt'] ?? ''));
+        if ($storedAt === false) {
+            return false;
+        }
+
+        return $storedAt >= time() - $seconds;
+    }
+
+    /**
+     * Return true when a rendered page already completed a recent refresh.
+     */
+    private function renderedPageRefreshedWithin(array $rendered, int $seconds): bool
+    {
+        $refreshedAt = strtotime((string) ($rendered['refreshedAt'] ?? ''));
+        if ($refreshedAt === false) {
+            return false;
+        }
+
+        return $refreshedAt >= time() - $seconds;
     }
 
     /**
@@ -270,6 +329,11 @@ class NewtxtManager
 
         $siteId = $this->siteId();
         if ($siteId === '' || trim($html) === '') {
+            return null;
+        }
+
+        $options = $this->normalizeRenderedPageOptions($options);
+        if ($options === null) {
             return null;
         }
 
@@ -704,6 +768,9 @@ class NewtxtManager
         $rendered['pageHash'] = $this->hasher->pageHash($siteId, $languageCode, $urlMode, $path, $html, $version);
         $rendered['pageHashVersion'] = $version;
         $rendered['storedAt'] = gmdate('c');
+        if (filter_var($options['forceRefreshCache'] ?? false, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === true) {
+            $rendered['refreshedAt'] = gmdate('c');
+        }
 
         if ($this->cacheTranslatedPages() && (bool) $this->config->get('newtxt.store_rendered_pages', true)) {
             $this->snapshots->put(array_merge($rendered, [
@@ -715,9 +782,39 @@ class NewtxtManager
             ]), (bool) $this->config->get('newtxt.store_rendered_html', true));
         }
 
-        $this->syncRenderedPageTranslations($languageCode, $path, $urlMode, $options);
+        $this->queueRenderedPageTranslationsSync($languageCode, $path, $urlMode, $options);
 
         return $rendered;
+    }
+
+    /**
+     * Schedule hash-addressed translation sync outside the response path.
+     */
+    private function queueRenderedPageTranslationsSync(string $languageCode, string $path, string $urlMode, array $options): void
+    {
+        if (
+            filter_var($options['syncHashedTranslationsOnRender'] ?? true, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) === false
+            || !(bool) $this->config->get('newtxt.store_hashed_translations', true)
+            || !(bool) $this->config->get('newtxt.sync_hashed_translations_on_render', true)
+        ) {
+            return;
+        }
+
+        if ((bool) $this->config->get('newtxt.sync_hashed_translations_after_response', true)) {
+            $ran = false;
+            app()->terminating(function () use (&$ran, $languageCode, $path, $urlMode, $options): void {
+                if ($ran) {
+                    return;
+                }
+
+                $ran = true;
+                $this->syncRenderedPageTranslations($languageCode, $path, $urlMode, $options);
+            });
+
+            return;
+        }
+
+        $this->syncRenderedPageTranslations($languageCode, $path, $urlMode, $options);
     }
 
     /**
@@ -1022,6 +1119,155 @@ class NewtxtManager
         $hash = sha1(json_encode([$siteId, $languageCode, $urlMode, $path, $query, $this->pageHashVersion()], JSON_THROW_ON_ERROR));
 
         return trim((string) $this->config->get('newtxt.cache_prefix', 'newtxt:rendered-pages'), ':') . ':' . $hash;
+    }
+
+    /**
+     * Render a fresh translated page and replace the exact local cache entry.
+     */
+    private function renderAndStoreRenderedPage(string $languageCode, string $path, array $options, string $cacheKey, int $ttl): ?array
+    {
+        $rendered = $this->renderPage($languageCode, $path, $options);
+        $store = $this->cacheStore();
+
+        if (is_array($rendered) && $this->isRenderedPageReady($rendered, $languageCode)) {
+            $store->put($cacheKey, $rendered, $ttl);
+
+            return $rendered;
+        }
+
+        $store->forget($cacheKey);
+
+        return $rendered;
+    }
+
+    /**
+     * Normalize render options before cache, artifact, and API use.
+     */
+    private function normalizeRenderedPageOptions(array $options): ?array
+    {
+        $query = $this->normalizedRenderedPageQuery((string) ($options['query'] ?? ''));
+        if ($query === null) {
+            return null;
+        }
+
+        $options['query'] = $query;
+
+        return $options;
+    }
+
+    /**
+     * Return the bounded cache identity query, or null when SSR must be skipped.
+     */
+    private function normalizedRenderedPageQuery(string $query): ?string
+    {
+        $query = ltrim(trim($query), '?');
+        if ($query === '') {
+            return '';
+        }
+
+        $maxLength = max(0, (int) $this->config->get('newtxt.max_rendered_page_query_length', 1024));
+        if ($maxLength > 0 && strlen($query) > $maxLength) {
+            return null;
+        }
+
+        parse_str($query, $parsed);
+        if (!is_array($parsed) || $parsed === []) {
+            return '';
+        }
+
+        $maxParameters = max(1, (int) $this->config->get('newtxt.max_rendered_page_query_parameters', 20));
+        if (count($parsed) > $maxParameters) {
+            return null;
+        }
+
+        $ignoredPatterns = $this->queryParameterPatterns('newtxt.ignored_rendered_page_query_parameters');
+        $allowedPatterns = $this->queryParameterPatterns('newtxt.rendered_page_query_parameters');
+        $allowed = [];
+
+        foreach ($parsed as $key => $value) {
+            $key = trim((string) $key);
+            if ($key === '') {
+                continue;
+            }
+
+            if ($this->queryParameterMatches($key, $ignoredPatterns)) {
+                continue;
+            }
+
+            if (!$this->queryParameterMatches($key, $allowedPatterns)) {
+                if (filter_var(
+                    $this->config->get('newtxt.reject_unsupported_rendered_page_queries', true),
+                    FILTER_VALIDATE_BOOL,
+                    FILTER_NULL_ON_FAILURE,
+                ) === true) {
+                    return null;
+                }
+
+                continue;
+            }
+
+            $allowed[$key] = $this->normalizeQueryValue($value);
+        }
+
+        if ($allowed === []) {
+            return '';
+        }
+
+        ksort($allowed);
+
+        return http_build_query($allowed, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    /**
+     * Read query parameter patterns from config as lowercase values.
+     *
+     * @return list<string>
+     */
+    private function queryParameterPatterns(string $configKey): array
+    {
+        return collect(Arr::wrap($this->config->get($configKey, [])))
+            ->map(fn ($value) => strtolower(trim((string) $value)))
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Match query parameters with exact or wildcard config patterns.
+     */
+    private function queryParameterMatches(string $key, array $patterns): bool
+    {
+        $key = strtolower($key);
+        foreach ($patterns as $pattern) {
+            if (Str::is($pattern, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Normalize query values before building canonical cache keys.
+     */
+    private function normalizeQueryValue(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            $normalized = [];
+            foreach ($value as $key => $nestedValue) {
+                $normalized[(string) $key] = $this->normalizeQueryValue($nestedValue);
+            }
+
+            ksort($normalized);
+
+            return $normalized;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        return substr(trim((string) $value), 0, 512);
     }
 
     /**
@@ -1508,7 +1754,10 @@ class NewtxtManager
             return null;
         }
 
-        return rtrim($siteUrl, '/') . $this->normalizePath($path);
+        $query = ltrim(trim((string) ($options['query'] ?? '')), '?');
+        $url = rtrim($siteUrl, '/') . $this->normalizePath($path);
+
+        return $query !== '' ? "{$url}?{$query}" : $url;
     }
 
     private function localizedPageUrl(string $path, string $languageCode, string $urlMode, array $options = []): ?string
@@ -1518,7 +1767,7 @@ class NewtxtManager
             return null;
         }
 
-        return $this->localizedSitemapUrl($siteUrl, $path, $languageCode, $urlMode);
+        return $this->localizedSitemapUrl($siteUrl, $path, $languageCode, $urlMode, (string) ($options['query'] ?? ''));
     }
 
     private function localizedPath(string $path, string $languageCode): string

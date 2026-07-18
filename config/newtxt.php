@@ -84,6 +84,24 @@ return [
     'cache_prefix' => 'newtxt:rendered-pages',
     'refresh_rendered_pages_after_local_hit' => true,
     'rendered_page_refresh_ttl' => 300,
+    'ignored_rendered_page_query_parameters' => [
+        'utm',
+        'utm_*',
+        'gclid',
+        'gbraid',
+        'wbraid',
+        'fbclid',
+        'msclkid',
+        'yclid',
+        '_gl',
+        '_ga',
+        'ref',
+        'ref_src',
+    ],
+    'rendered_page_query_parameters' => [],
+    'reject_unsupported_rendered_page_queries' => true,
+    'max_rendered_page_query_parameters' => 20,
+    'max_rendered_page_query_length' => 1024,
 
     /*
     |--------------------------------------------------------------------------
@@ -102,6 +120,7 @@ return [
     'store_source_page_hashes' => true,
     'store_source_html' => false,
     'sync_hashed_translations_on_render' => true,
+    'sync_hashed_translations_after_response' => true,
     'sync_hashed_translations_on_prewarm' => true,
     'page_hash_version' => 'newtxt-laravel-v3',
     'require_translated_render_marker' => true,
@@ -137,8 +156,11 @@ return [
     'callback_signature_header' => 'X-NewTXT-Signature',
     'callback_timestamp_header' => 'X-NewTXT-Timestamp',
     'callback_tolerance_seconds' => 300,
+    'callback_replay_protection' => true,
+    'callback_replay_cache_prefix' => 'newtxt:callback-replay',
+    'callback_cache_store' => null,
     'callback_allowed_actions' => ['health.check', 'cache.clear', 'page.prewarm', 'translations.sync'],
-    'callback_middleware' => [],
+    'callback_middleware' => ['throttle:30,1'],
 
     /*
     |--------------------------------------------------------------------------

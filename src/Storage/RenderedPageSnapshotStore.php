@@ -87,18 +87,89 @@ class RenderedPageSnapshotStore
      */
     public function forget(string $siteId, string $languageCode, string $urlMode, string $path, string $query = '', ?string $version = null): void
     {
+        $siteId = $this->sanitizePathPart($siteId);
+        $languageCode = $this->sanitizePathPart($languageCode);
+        $directory = $this->pageDirectory($siteId, $languageCode);
         $indexPath = $this->indexPath(
-            $this->sanitizePathPart($siteId),
-            $this->sanitizePathPart($languageCode),
+            $siteId,
+            $languageCode,
             $urlMode,
             $path,
             $query,
             $version,
         );
+        $index = $this->readJson($indexPath);
 
         if ($this->files->exists($indexPath)) {
             $this->files->delete($indexPath);
         }
+
+        $pageHash = $this->sanitizePathPart((string) ($index['pageHash'] ?? ''));
+        if ($pageHash !== 'unknown' && !$this->isPageHashIndexed($directory, $pageHash)) {
+            $this->deleteSnapshotArtifact($directory, $pageHash);
+        }
+    }
+
+    /**
+     * Report or delete unindexed rendered page artifacts older than the limit.
+     */
+    public function pruneStaleArtifacts(int $olderThanSeconds, bool $delete = false, ?string $siteId = null, ?array $languageCodes = null): array
+    {
+        $basePath = $this->basePath() . '/pages';
+        if (!$this->files->isDirectory($basePath)) {
+            return [
+                'scanned' => 0,
+                'stale' => 0,
+                'deleted' => 0,
+                'bytes' => 0,
+            ];
+        }
+
+        $cutoff = time() - max(0, $olderThanSeconds);
+        $allowedLanguages = $this->languageFilter($languageCodes);
+        $summary = [
+            'scanned' => 0,
+            'stale' => 0,
+            'deleted' => 0,
+            'bytes' => 0,
+        ];
+
+        foreach ($this->siteDirectories($basePath, $siteId) as $siteDirectory) {
+            foreach ($this->files->directories($siteDirectory) as $languageDirectory) {
+                $safeLanguageCode = basename($languageDirectory);
+                if ($allowedLanguages !== null && !isset($allowedLanguages[$safeLanguageCode])) {
+                    continue;
+                }
+
+                $indexedHashes = $this->indexedPageHashes($languageDirectory);
+                foreach ($this->files->files($languageDirectory) as $file) {
+                    if (strtolower($file->getExtension()) !== 'json') {
+                        continue;
+                    }
+
+                    $summary['scanned']++;
+                    $metadata = $this->readJson($file->getPathname()) ?? [];
+                    $pageHash = $this->sanitizePathPart((string) ($metadata['pageHash'] ?? $file->getFilenameWithoutExtension()));
+                    if (isset($indexedHashes[$pageHash])) {
+                        continue;
+                    }
+
+                    if ($this->snapshotUpdatedAt($metadata, $file->getPathname()) > $cutoff) {
+                        continue;
+                    }
+
+                    $summary['stale']++;
+                    $summary['bytes'] += $this->snapshotArtifactBytes($languageDirectory, $pageHash, $metadata);
+
+                    if ($delete) {
+                        $this->deleteSnapshotArtifact($languageDirectory, $pageHash);
+                        $summary['deleted']++;
+                    }
+                }
+            }
+        }
+
+        return $summary;
     }
 
     /**
@@ -265,6 +336,83 @@ class RenderedPageSnapshotStore
             $htmlFullPath !== '' &&
             $this->files->exists($htmlFullPath) &&
             trim((string) $this->files->get($htmlFullPath)) !== '';
+    }
+
+    /**
+     * Return page hashes currently referenced by request indexes.
+     */
+    private function indexedPageHashes(string $languageDirectory): array
+    {
+        $indexDirectory = $languageDirectory . '/indexes';
+        if (!$this->files->isDirectory($indexDirectory)) {
+            return [];
+        }
+
+        $hashes = [];
+        foreach ($this->files->files($indexDirectory) as $file) {
+            if (strtolower($file->getExtension()) !== 'json') {
+                continue;
+            }
+
+            $pageHash = $this->sanitizePathPart((string) (($this->readJson($file->getPathname()) ?? [])['pageHash'] ?? ''));
+            if ($pageHash !== 'unknown') {
+                $hashes[$pageHash] = true;
+            }
+        }
+
+        return $hashes;
+    }
+
+    /**
+     * Check whether a snapshot artifact is still referenced by any index.
+     */
+    private function isPageHashIndexed(string $languageDirectory, string $pageHash): bool
+    {
+        return isset($this->indexedPageHashes($languageDirectory)[$this->sanitizePathPart($pageHash)]);
+    }
+
+    /**
+     * Delete snapshot metadata and HTML files for one page hash.
+     */
+    private function deleteSnapshotArtifact(string $languageDirectory, string $pageHash): void
+    {
+        foreach (["{$pageHash}.json", "{$pageHash}.html"] as $fileName) {
+            $path = $languageDirectory . '/' . basename($fileName);
+            if ($this->files->exists($path)) {
+                $this->files->delete($path);
+            }
+        }
+    }
+
+    /**
+     * Return the best available update timestamp for pruning decisions.
+     */
+    private function snapshotUpdatedAt(array $metadata, string $metadataPath): int
+    {
+        foreach (['updatedAt', 'storedAt'] as $key) {
+            $timestamp = strtotime((string) ($metadata[$key] ?? ''));
+            if ($timestamp !== false) {
+                return $timestamp;
+            }
+        }
+
+        return $this->files->lastModified($metadataPath);
+    }
+
+    /**
+     * Count metadata and HTML bytes for one snapshot artifact.
+     */
+    private function snapshotArtifactBytes(string $languageDirectory, string $pageHash, array $metadata): int
+    {
+        $bytes = 0;
+        foreach (["{$pageHash}.json", basename((string) ($metadata['htmlPath'] ?? "{$pageHash}.html"))] as $fileName) {
+            $path = $languageDirectory . '/' . $fileName;
+            if ($this->files->exists($path)) {
+                $bytes += $this->files->size($path);
+            }
+        }
+
+        return $bytes;
     }
 
     /**
