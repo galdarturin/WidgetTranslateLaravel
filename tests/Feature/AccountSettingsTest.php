@@ -79,6 +79,37 @@ class AccountSettingsTest extends TestCase
         $this->assertNull($manager->extractLanguageFromPath('/fr/about'));
     }
 
+    public function test_account_settings_drive_image_capture_and_replacement_flags(): void
+    {
+        config()->set('newtxt.public_key', 'site-images-public-key');
+        config()->set('newtxt.private_key', 'site-images-private-key');
+        config()->set('newtxt.api_key', 'site-images-api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000020',
+                'publicKey' => 'site-images-public-key',
+                'sourceLanguage' => 'en',
+                'translationMode' => 'seo',
+                'widgetSettings' => [
+                    'enabled' => true,
+                    'captureImagesForTranslation' => true,
+                ],
+                'features' => [
+                    'imageReplacement' => true,
+                ],
+                'targetLanguages' => [
+                    ['languageCode' => 'fr', 'isDefault' => false],
+                ],
+            ]),
+        ]);
+
+        $manager = app(NewtxtManager::class);
+
+        $this->assertTrue($manager->capturesImagesForTranslation());
+        $this->assertTrue($manager->imageReplacementEnabled());
+    }
+
     public function test_account_page_rules_filter_sitemap_entries_and_resolve_redirects(): void
     {
         config()->set('newtxt.public_key', 'site-rules-public-key');

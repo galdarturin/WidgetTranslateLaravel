@@ -13,6 +13,7 @@ use Newtxt\Laravel\Console\PrewarmCommand;
 use Newtxt\Laravel\Console\PruneStorageCommand;
 use Newtxt\Laravel\Console\SyncTranslationsCommand;
 use Newtxt\Laravel\Html\PageHasher;
+use Newtxt\Laravel\Html\SeoMetadataExtractor;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Http\Controllers\NewtxtCallbackController;
 use Newtxt\Laravel\Http\Middleware\ServeNewtxtTranslatedPages;
@@ -42,6 +43,7 @@ class NewtxtServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(PageHasher::class);
+        $this->app->singleton(SeoMetadataExtractor::class);
         $this->app->singleton(SeoMetadataInjector::class);
         $this->app->singleton(CallbackSignatureVerifier::class, function ($app) {
             $store = config('newtxt.callback_cache_store');
@@ -73,6 +75,7 @@ class NewtxtServiceProvider extends ServiceProvider
                 $app->make(HashedTranslationStore::class),
                 $app->make(RenderedPageSnapshotStore::class),
                 $app->make(PageHasher::class),
+                $app->make(SeoMetadataExtractor::class),
                 $app->make(SeoMetadataInjector::class),
             );
         });

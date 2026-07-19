@@ -93,6 +93,14 @@ class SeoMetadataInjector
             $description = $this->pageDescription($document);
         }
 
+        $keywords = $this->textValue(
+            $metadata['keywords']
+                ?? $metadata['metaKeywords']
+                ?? $metadata['seoKeywords']
+                ?? null,
+            1024,
+        );
+
         $tableOfContents = $this->tableOfContentsValue(
             $metadata['tableOfContents']
                 ?? $metadata['toc']
@@ -104,17 +112,34 @@ class SeoMetadataInjector
         }
 
         $replaceSocialMetadata = (bool) ($metadata['replaceSocialMetadata'] ?? false);
+        $replaceKeywords = (bool) ($metadata['replaceKeywords'] ?? false);
+        $openGraphTitle = $this->textValue(
+            $metadata['openGraphTitle']
+                ?? $metadata['ogTitle']
+                ?? $metadata['metaOgTitle']
+                ?? $title,
+        );
+        $openGraphDescription = $this->textValue(
+            $metadata['openGraphDescription']
+                ?? $metadata['ogDescription']
+                ?? $metadata['metaOgDescription']
+                ?? $description,
+        );
+        $twitterTitle = $this->textValue($metadata['twitterTitle'] ?? $title);
+        $twitterDescription = $this->textValue($metadata['twitterDescription'] ?? $description);
         foreach ([
             ['name', 'description', $description],
-            ['property', 'og:title', $title],
-            ['property', 'og:description', $description],
-            ['name', 'twitter:title', $title],
-            ['name', 'twitter:description', $description],
+            ['name', 'keywords', $keywords],
+            ['property', 'og:title', $openGraphTitle],
+            ['property', 'og:description', $openGraphDescription],
+            ['name', 'twitter:title', $twitterTitle],
+            ['name', 'twitter:description', $twitterDescription],
             ['name', 'newtxt:table-of-contents', $tableOfContents],
         ] as [$attribute, $key, $value]) {
             $value = $this->textValue($value);
             if ($value !== '') {
                 $replace = ($key === 'description' && $replaceDescription)
+                    || ($key === 'keywords' && $replaceKeywords)
                     || ($replaceSocialMetadata && in_array($key, ['og:title', 'og:description', 'twitter:title', 'twitter:description'], true));
                 $this->writeMeta($document, $head, $attribute, $key, $value, $replace);
             }

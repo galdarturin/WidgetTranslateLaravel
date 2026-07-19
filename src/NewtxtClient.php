@@ -74,6 +74,11 @@ class NewtxtClient
             $payload['query'] = $query;
         }
 
+        $sourceSeoMetadata = $this->sourceSeoMetadata($options['sourceSeoMetadata'] ?? []);
+        if ($sourceSeoMetadata !== []) {
+            $payload['sourceSeoMetadata'] = $sourceSeoMetadata;
+        }
+
         return $this->post('/localization/integrations/laravel/pages/render', $payload);
     }
 
@@ -130,6 +135,53 @@ class NewtxtClient
             ->json();
 
         return is_array($response) ? $response : [];
+    }
+
+    /**
+     * Keep source SEO render context bounded to known text metadata fields.
+     */
+    private function sourceSeoMetadata(mixed $metadata): array
+    {
+        if (!is_array($metadata)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ([
+            'title' => 512,
+            'description' => 1024,
+            'keywords' => 1024,
+            'openGraphTitle' => 512,
+            'openGraphDescription' => 1024,
+            'twitterTitle' => 512,
+            'twitterDescription' => 1024,
+        ] as $key => $limit) {
+            $value = $this->textMetadataValue($metadata[$key] ?? null, $limit);
+            if ($value !== '') {
+                $normalized[$key] = $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Normalize safe plain-text metadata values.
+     */
+    private function textMetadataValue(mixed $value, int $limit): string
+    {
+        if (!is_scalar($value) && !$value instanceof \Stringable) {
+            return '';
+        }
+
+        $text = trim(strip_tags((string) $value));
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        if (function_exists('mb_substr')) {
+            return mb_substr($text, 0, $limit);
+        }
+
+        return substr($text, 0, $limit);
     }
 
     /**

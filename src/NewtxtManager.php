@@ -10,6 +10,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Newtxt\Laravel\Html\PageHasher;
+use Newtxt\Laravel\Html\SeoMetadataExtractor;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Storage\HashedTranslationStore;
 use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
@@ -27,6 +28,7 @@ class NewtxtManager
         private readonly HashedTranslationStore $translations,
         private readonly RenderedPageSnapshotStore $snapshots,
         private readonly PageHasher $hasher,
+        private readonly SeoMetadataExtractor $seoExtractor,
         private readonly SeoMetadataInjector $seo,
     ) {
     }
@@ -74,11 +76,14 @@ class NewtxtManager
         if ($options === null) {
             return null;
         }
+        $languageCode = $this->normalizeLanguageCode($languageCode);
+        $path = $this->normalizePath($path);
+        $options = $this->withSourceSeoMetadata($languageCode, $path, $options);
 
         try {
             $rendered = $this->client->renderPage(
-                $this->normalizeLanguageCode($languageCode),
-                $this->normalizePath($path),
+                $languageCode,
+                $path,
                 array_merge(['urlMode' => $this->urlMode()], $options),
             );
         } catch (Throwable) {
@@ -353,6 +358,10 @@ class NewtxtManager
             'query' => (string) ($options['query'] ?? ''),
             'html' => $html,
         ];
+        $sourceSeoMetadata = $this->seoExtractor->extract($html);
+        if ($sourceSeoMetadata !== []) {
+            $snapshot['sourceSeoMetadata'] = $sourceSeoMetadata;
+        }
 
         $this->snapshots->put($snapshot, (bool) $this->config->get('newtxt.store_source_html', false));
 
@@ -559,6 +568,31 @@ class NewtxtManager
     public function canRenderTranslatedPages(): bool
     {
         return $this->canServeTranslatedPages() && $this->hasServerCredentials();
+    }
+
+    /**
+     * Return true when the account allows widget image inventory capture.
+     */
+    public function capturesImagesForTranslation(): bool
+    {
+        return $this->boolAccountValue([
+            'captureImagesForTranslation',
+            'widgetSettings.captureImagesForTranslation',
+            'settings.captureImagesForTranslation',
+        ], true);
+    }
+
+    /**
+     * Return true when uploaded language image replacements may be applied by the widget runtime.
+     */
+    public function imageReplacementEnabled(): bool
+    {
+        return $this->capturesImagesForTranslation()
+            && $this->boolAccountValue([
+                'imageReplacement',
+                'features.imageReplacement',
+                'widgetFeatures.imageReplacement',
+            ], true);
     }
 
     /**
@@ -863,8 +897,10 @@ class NewtxtManager
             'replaceRobots' => true,
             'replaceTitle' => true,
             'replaceDescription' => true,
+            'replaceKeywords' => true,
             'replaceSocialMetadata' => true,
         ];
+        $sourceSeoMetadata = $this->normalizedSourceSeoMetadata($options['sourceSeoMetadata'] ?? []);
 
         $title = $this->firstMetadataValue($rendered, [
             'title',
@@ -876,6 +912,9 @@ class NewtxtManager
             'seo.title',
             'seo.metaTitle',
         ]);
+        if ($title === null) {
+            $title = $this->translatedSourceSeoMetadataValue($languageCode, $sourceSeoMetadata, ['title']);
+        }
         if ($title !== null) {
             $metadata['title'] = $title;
         }
@@ -891,8 +930,64 @@ class NewtxtManager
             'seo.description',
             'seo.metaDescription',
         ]);
+        if ($description === null) {
+            $description = $this->translatedSourceSeoMetadataValue($languageCode, $sourceSeoMetadata, ['description']);
+        }
         if ($description !== null) {
             $metadata['description'] = $description;
+        }
+
+        $keywords = $this->firstMetadataValue($rendered, [
+            'keywords',
+            'metaKeywords',
+            'seoKeywords',
+            'metadata.keywords',
+            'metadata.metaKeywords',
+            'seo.keywords',
+            'seo.metaKeywords',
+        ]);
+        if ($keywords === null) {
+            $keywords = $this->translatedSourceSeoMetadataValue($languageCode, $sourceSeoMetadata, ['keywords']);
+        }
+        if ($keywords !== null) {
+            $metadata['keywords'] = $keywords;
+        }
+
+        foreach ([
+            'openGraphTitle' => [
+                'openGraphTitle',
+                'ogTitle',
+                'metadata.openGraphTitle',
+                'metadata.ogTitle',
+                'seo.openGraphTitle',
+                'seo.ogTitle',
+            ],
+            'openGraphDescription' => [
+                'openGraphDescription',
+                'ogDescription',
+                'metadata.openGraphDescription',
+                'metadata.ogDescription',
+                'seo.openGraphDescription',
+                'seo.ogDescription',
+            ],
+            'twitterTitle' => [
+                'twitterTitle',
+                'metadata.twitterTitle',
+                'seo.twitterTitle',
+            ],
+            'twitterDescription' => [
+                'twitterDescription',
+                'metadata.twitterDescription',
+                'seo.twitterDescription',
+            ],
+        ] as $metadataKey => $payloadKeys) {
+            $value = $this->firstMetadataValue($rendered, $payloadKeys);
+            if ($value === null) {
+                $value = $this->translatedSourceSeoMetadataValue($languageCode, $sourceSeoMetadata, [$metadataKey]);
+            }
+            if ($value !== null) {
+                $metadata[$metadataKey] = $value;
+            }
         }
 
         $tableOfContents = $this->firstMetadataValue($rendered, [
@@ -912,6 +1007,109 @@ class NewtxtManager
         $customMetadata = is_array($options['seo'] ?? null) ? $options['seo'] : [];
 
         return array_merge($metadata, $customMetadata);
+    }
+
+    /**
+     * Attach cached source SEO text so the API can translate page head tags.
+     */
+    private function withSourceSeoMetadata(string $languageCode, string $path, array $options): array
+    {
+        if ($languageCode === $this->sourceLanguage()) {
+            return $options;
+        }
+
+        $metadata = $this->normalizedSourceSeoMetadata($options['sourceSeoMetadata'] ?? []);
+        if ($metadata === []) {
+            $metadata = $this->sourceSeoMetadataForRender($path, $options);
+        }
+
+        if ($metadata !== []) {
+            $options['sourceSeoMetadata'] = $metadata;
+        }
+
+        return $options;
+    }
+
+    /**
+     * Read source SEO metadata captured from the latest source response.
+     */
+    private function sourceSeoMetadataForRender(string $path, array $options): array
+    {
+        $siteId = $this->siteId();
+        if ($siteId === '') {
+            return [];
+        }
+
+        try {
+            $snapshot = $this->snapshots->metadata(
+                $siteId,
+                $this->sourceLanguage(),
+                (string) ($options['urlMode'] ?? $this->urlMode()),
+                $path,
+                (string) ($options['query'] ?? ''),
+                $this->pageHashVersion(),
+            );
+        } catch (Throwable) {
+            return [];
+        }
+
+        return is_array($snapshot)
+            ? $this->normalizedSourceSeoMetadata($snapshot['sourceSeoMetadata'] ?? [])
+            : [];
+    }
+
+    /**
+     * Normalize source SEO metadata before storage, API payload, or lookup use.
+     */
+    private function normalizedSourceSeoMetadata(mixed $metadata): array
+    {
+        if (!is_array($metadata)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ([
+            'title' => 512,
+            'description' => 1024,
+            'keywords' => 1024,
+            'openGraphTitle' => 512,
+            'openGraphDescription' => 1024,
+            'twitterTitle' => 512,
+            'twitterDescription' => 1024,
+        ] as $key => $limit) {
+            $value = $this->textMetadataValue($metadata[$key] ?? null, $limit);
+            if ($value !== '') {
+                $normalized[$key] = $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Resolve translated source SEO text from local hash-addressed artifacts.
+     */
+    private function translatedSourceSeoMetadataValue(string $languageCode, array $sourceSeoMetadata, array $keys): mixed
+    {
+        foreach ($keys as $key) {
+            $sourceText = $this->textMetadataValue($sourceSeoMetadata[$key] ?? null, 1024);
+            if ($sourceText === '') {
+                continue;
+            }
+
+            try {
+                $entry = $this->translations->get($languageCode, $sourceText, $this->siteId());
+            } catch (Throwable) {
+                continue;
+            }
+
+            $translatedText = $this->textMetadataValue($entry['translatedText'] ?? null, 1024);
+            if ($translatedText !== '') {
+                return $translatedText;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1106,6 +1304,25 @@ class NewtxtManager
         }
 
         return null;
+    }
+
+    /**
+     * Normalize safe plain-text metadata values.
+     */
+    private function textMetadataValue(mixed $value, int $limit): string
+    {
+        if (!is_scalar($value) && !$value instanceof \Stringable) {
+            return '';
+        }
+
+        $text = trim(strip_tags((string) $value));
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        if (function_exists('mb_substr')) {
+            return mb_substr($text, 0, $limit);
+        }
+
+        return substr($text, 0, $limit);
     }
 
     /**

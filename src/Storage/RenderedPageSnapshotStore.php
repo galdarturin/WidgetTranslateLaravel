@@ -83,6 +83,27 @@ class RenderedPageSnapshotStore
     }
 
     /**
+     * Read stored snapshot metadata without requiring full HTML storage.
+     */
+    public function metadata(string $siteId, string $languageCode, string $urlMode, string $path, string $query = '', ?string $version = null): ?array
+    {
+        $siteId = $this->sanitizePathPart($siteId);
+        $languageCode = $this->sanitizePathPart($languageCode);
+        $directory = $this->pageDirectory($siteId, $languageCode);
+        $index = $this->readJson($this->indexPath($siteId, $languageCode, $urlMode, $path, $query, $version));
+        if ($index === null) {
+            return null;
+        }
+
+        $pageHash = trim((string) ($index['pageHash'] ?? ''));
+        if ($pageHash === '') {
+            return null;
+        }
+
+        return $this->readJson($directory . '/' . $this->sanitizePathPart($pageHash) . '.json');
+    }
+
+    /**
      * Remove the local request index for a rendered page snapshot.
      */
     public function forget(string $siteId, string $languageCode, string $urlMode, string $path, string $query = '', ?string $version = null): void

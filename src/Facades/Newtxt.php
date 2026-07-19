@@ -23,6 +23,8 @@ use Newtxt\Laravel\NewtxtManager;
  * @method static array targetLanguages()
  * @method static bool isRenderedPageReady(array $rendered, ?string $languageCode = null)
  * @method static bool contentRefreshDisabledForPath(string $path)
+ * @method static bool capturesImagesForTranslation()
+ * @method static bool imageReplacementEnabled()
  */
 class Newtxt extends Facade
 {

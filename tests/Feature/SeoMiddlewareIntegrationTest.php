@@ -383,6 +383,84 @@ class SeoMiddlewareIntegrationTest extends TestCase
         });
     }
 
+    public function test_translated_render_replaces_source_head_metadata_from_captured_context(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-source-seo-' . bin2hex(random_bytes(6));
+
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.public_key', 'public-site-key');
+        config()->set('newtxt.private_key', 'private-site-key');
+        config()->set('newtxt.api_key', 'api-site-key');
+        config()->set('newtxt.account_settings_cache_ttl', 0);
+        config()->set('newtxt.cache_ttl', 0);
+        config()->set('app.url', 'https://example.test');
+        $this->beforeApplicationDestroyed(static function () use ($storagePath): void {
+            (new Filesystem())->deleteDirectory($storagePath);
+        });
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/settings' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000040',
+                'publicKey' => 'public-site-key',
+                'sourceLanguage' => 'en',
+                'defaultUrlMode' => 'path',
+                'translationMode' => 'seo',
+                'targetLanguages' => [
+                    ['languageCode' => 'fr', 'displayName' => 'French', 'isDefault' => false],
+                ],
+            ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
+                'siteId' => '00000000-0000-0000-0000-000000000040',
+                'languageCode' => 'fr',
+                'path' => '/about',
+                'urlMode' => 'path',
+                'translatedUrl' => 'https://example.test/fr/about',
+                'fromCache' => false,
+                'html' => '<html data-cservice-rendered="translated-html" data-cservice-rendered-language="fr"><head><title>Source title</title><meta name="description" content="Source description"><meta name="keywords" content="source, seo"><meta property="og:title" content="Source OG title"></head><body><main><h1>Bonjour</h1><p>Contenu localise avec assez de detail pour une meta description.</p></main></body></html>',
+            ]),
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/translations*' => Http::response([
+                'nodes' => [],
+            ]),
+        ]);
+
+        Route::middleware(['web', 'newtxt.render'])->get('/{path?}', function () {
+            return response('<html><head><title>Source title</title><meta name="description" content="Source description"><meta name="keywords" content="source, seo"><meta property="og:title" content="Source OG title"></head><body><main><h1>Source heading</h1><p>Source page body.</p></main></body></html>', 200)
+                ->header('Content-Type', 'text/html; charset=UTF-8');
+        })->where('path', '.*');
+
+        $sourceResponse = $this->get('/about');
+        $sourceResponse->assertOk();
+
+        $manager = app(NewtxtManager::class);
+        $manager->putHashedTranslation('fr', 'Source title', 'Titre source');
+        $manager->putHashedTranslation('fr', 'Source description', 'Description source');
+        $manager->putHashedTranslation('fr', 'source, seo', 'source, referencement');
+        $manager->putHashedTranslation('fr', 'Source OG title', 'Titre reseaux source');
+
+        $response = $this->get('/fr/about');
+
+        $response->assertOk();
+        $response->assertHeader('X-NewTXT-Translation-Status', 'ready');
+        $response->assertSee('<title>Titre source</title>', false);
+        $response->assertSee('name="description" content="Description source"', false);
+        $response->assertSee('name="keywords" content="source, referencement"', false);
+        $response->assertSee('property="og:title" content="Titre reseaux source"', false);
+        $response->assertDontSee('<title>Source title</title>', false);
+        $response->assertDontSee('content="Source description"', false);
+
+        Http::assertSent(function ($request) {
+            $payload = json_decode($request->body(), true);
+
+            return $request->method() === 'POST'
+                && str_contains((string) $request->url(), '/integrations/laravel/pages/render')
+                && is_array($payload)
+                && ($payload['sourceSeoMetadata']['title'] ?? null) === 'Source title'
+                && ($payload['sourceSeoMetadata']['description'] ?? null) === 'Source description'
+                && ($payload['sourceSeoMetadata']['keywords'] ?? null) === 'source, seo'
+                && ($payload['sourceSeoMetadata']['openGraphTitle'] ?? null) === 'Source OG title';
+        });
+    }
+
     public function test_incomplete_remote_render_falls_back_to_noindex_source_html(): void
     {
         $renderRequests = 0;

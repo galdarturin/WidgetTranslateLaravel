@@ -48,6 +48,12 @@ composer require newtxt/newtxt-translate
 php artisan vendor:publish --tag=newtxt-config
 ```
 
+To target the v1.9 release line explicitly:
+
+```bash
+composer require newtxt/newtxt-translate:^1.9
+```
+
 ## Composer Distribution
 
 `composer require newtxt/newtxt-translate` works for customer projects only after the package is available through Composer package discovery.
@@ -209,6 +215,8 @@ The package reads target languages from NewTXT account settings or local fallbac
 ## SEO Metadata
 
 When local SEO metadata injection is enabled in the package config or account settings, public source HTML and rendered translated HTML receive a local SEO pass. Translated HTML is processed before it is cached or written to storage. Source pages preserve native metadata and receive only missing values. Complete translated pages treat the translated render as authoritative and replace stale source-language title, description, canonical, robots, Open Graph, Twitter, and language-alternate values.
+
+When a source page response already defines text-bearing SEO metadata, the middleware captures a bounded allow-list of `<title>`, description, keywords, Open Graph title/description, and Twitter title/description values before the local SEO pass. That source SEO context is sent only on signed server-side render requests so NewTXT can translate the existing head metadata for the selected language. URL, robots, canonical, and other control tags are not sent as translatable text.
 
 - `<link rel="canonical">`
 - `<link rel="alternate" hreflang="...">` for the source page, `x-default`, the current translated page, and other snapshot-backed ready languages

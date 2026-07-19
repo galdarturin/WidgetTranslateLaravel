@@ -106,6 +106,43 @@ class ClientSignatureTest extends TestCase
         });
     }
 
+    public function test_client_includes_source_seo_metadata_in_signed_render_body(): void
+    {
+        config()->set('newtxt.public_key', 'public-key');
+        config()->set('newtxt.private_key', 'private-key');
+        config()->set('newtxt.api_key', 'api-key');
+
+        Http::fake([
+            'https://api-v1.newtxt.io/api/v1/localization/integrations/laravel/pages/render' => Http::response([
+                'html' => '<html><body>Bonjour</body></html>',
+            ]),
+        ]);
+
+        app(NewtxtClient::class)->renderPage('fr', '/about', [
+            'urlMode' => 'path',
+            'sourceSeoMetadata' => [
+                'title' => 'Source title',
+                'description' => 'Source description',
+            ],
+        ]);
+
+        Http::assertSent(function ($request) {
+            $payload = json_decode($request->body(), true);
+            $timestamp = $request->header('X-NewTXT-Timestamp')[0] ?? '';
+            $expectedSignature = 'sha256=' . hash_hmac(
+                'sha256',
+                $timestamp . '.POST./localization/integrations/laravel/pages/render.' . $request->body(),
+                'private-key',
+            );
+
+            return $request->method() === 'POST'
+                && is_array($payload)
+                && ($payload['sourceSeoMetadata']['title'] ?? null) === 'Source title'
+                && ($payload['sourceSeoMetadata']['description'] ?? null) === 'Source description'
+                && $request->hasHeader('X-NewTXT-Signature', $expectedSignature);
+        });
+    }
+
     public function test_client_signs_page_translation_sync_query_requests(): void
     {
         config()->set('newtxt.public_key', 'public-key');
