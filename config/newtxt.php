@@ -127,6 +127,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Translated Page Sitemap
+    |--------------------------------------------------------------------------
+    |
+    | Ready translated page snapshots are published from a dedicated sitemap
+    | on the customer site. The generated XML is stored below storage_path and
+    | refreshed after successful renders and on public sitemap requests.
+    |
+    */
+    'sitemap_enabled' => true,
+    'sitemap_path' => '/translate-sitemap.xml',
+    'sitemap_site_url' => null,
+    'sitemap_include_query_strings' => false,
+    'sitemap_max_urls' => 50000,
+    'sitemap_max_bytes' => 50000000,
+    'sitemap_http_cache_ttl' => 300,
+    'sitemap_middleware' => [],
+
+    /*
+    |--------------------------------------------------------------------------
     | SEO Metadata Injection
     |--------------------------------------------------------------------------
     |

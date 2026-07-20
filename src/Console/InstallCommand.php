@@ -39,7 +39,11 @@ class InstallCommand extends Command
         $this->line('   php artisan newtxt:prewarm --language=fr --path=/');
         $this->line('   php artisan newtxt:translations-sync --language=fr --path=/');
         $this->line('');
-        $this->line('6. Register the signed service callback URL in NewTXT:');
+        $this->line('6. Declare the translated-page sitemap in public/robots.txt or the root sitemap index:');
+        $this->line('   Sitemap: https://your-domain.example/translate-sitemap.xml');
+        $this->line('   php artisan newtxt:sitemap-refresh --register-robots');
+        $this->line('');
+        $this->line('7. Register the signed service callback URL in NewTXT:');
         $this->line('   https://your-domain.example/newtxt/callback');
 
         return self::SUCCESS;

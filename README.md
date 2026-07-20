@@ -18,6 +18,7 @@ The Laravel package is the server-side NewTXT integration path. A Laravel site i
 - Read public sitemap URLs only when they already exist and are useful for local prewarm.
 - Build translated sitemap entries from application-provided source sitemap entries without requiring a custom sitemap implementation.
 - Include local rendered page snapshots in translated sitemap output when available.
+- Publish ready translated page URLs from `/translate-sitemap.xml` and keep a local XML artifact under project storage.
 - Keep crawling, discovery tools, AI translation, and translation orchestration inside the NewTXT service.
 - Keep private routes, account pages, checkout pages, APIs, and webhooks out of translation middleware.
 
@@ -48,10 +49,10 @@ composer require newtxt/newtxt-translate
 php artisan vendor:publish --tag=newtxt-config
 ```
 
-To target the v1.9 release line explicitly:
+To target the v1.10 release line explicitly:
 
 ```bash
-composer require newtxt/newtxt-translate:^1.9
+composer require newtxt/newtxt-translate:^1.10
 ```
 
 ## Composer Distribution
@@ -212,6 +213,30 @@ $entries = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMo
 
 The package reads target languages from NewTXT account settings or local fallback config, but publishes a translated sitemap location only after a complete canonical rendered-page snapshot has been stored for that language and path. By default, existing ready snapshot URLs are not removed from sitemap output just because widget translation is later disabled, a target language is disabled, or a path is excluded from widget runtime. NewTXT dashboard users can opt in to automatic sitemap cleanup for unavailable translated pages. Explicit page-level "remove from sitemap" rules always apply. Query-string snapshots, snapshots without stored HTML, and incomplete or older-version snapshots are excluded.
 
+## Translated Page Sitemap
+
+The package exposes a dedicated public sitemap on the customer domain:
+
+```text
+https://example.com/translate-sitemap.xml
+```
+
+The XML is regenerated after a complete translated page snapshot is stored and whenever the public sitemap is requested. The local artifact is written atomically to:
+
+```text
+storage/app/newtxt/sitemaps/translate-sitemap.xml
+```
+
+Only absolute URLs backed by complete, current-version translated HTML snapshots are included. The route returns XML with `ETag`, `Last-Modified`, bounded public caching, and `X-Content-Type-Options: nosniff`. Query-string URLs remain excluded unless `sitemap_include_query_strings` is explicitly enabled.
+
+Declare the sitemap from the root sitemap index or `public/robots.txt` so crawlers can discover it. The command below regenerates the XML and appends one missing `Sitemap:` directive without replacing existing robots directives:
+
+```bash
+php artisan newtxt:sitemap-refresh --register-robots
+```
+
+Without `--register-robots`, the command only regenerates the local XML and prints its public URL. The package does not overwrite an existing root sitemap and does not submit sites to Google Search Console because that requires property-owner authorization.
+
 ## SEO Metadata
 
 When local SEO metadata injection is enabled in the package config or account settings, public source HTML and rendered translated HTML receive a local SEO pass. Translated HTML is processed before it is cached or written to storage. Source pages preserve native metadata and receive only missing values. Complete translated pages treat the translated render as authoritative and replace stale source-language title, description, canonical, robots, Open Graph, Twitter, and language-alternate values.
@@ -290,6 +315,7 @@ $snippet = Newtxt::widgetSnippet();
 $stored = Newtxt::syncHashedTranslations('fr', '/about');
 $sitemap = Newtxt::sitemapEntries($sourceEntries, 'https://example.com', ['urlMode' => 'path']);
 $sitemapEntries = Newtxt::renderedPageSitemapEntries('https://example.com');
+$generatedSitemap = Newtxt::refreshSitemap('https://example.com');
 ```
 
 Use direct API calls for controlled application workflows. Keep route middleware scoped to public pages for normal request handling.

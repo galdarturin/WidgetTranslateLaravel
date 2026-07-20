@@ -14,6 +14,7 @@ use Newtxt\Laravel\Html\SeoMetadataExtractor;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Storage\HashedTranslationStore;
 use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
+use Newtxt\Laravel\Storage\TranslatedSitemapStore;
 use Newtxt\Laravel\Support\ConfigCredential;
 use Throwable;
 
@@ -30,6 +31,7 @@ class NewtxtManager
         private readonly PageHasher $hasher,
         private readonly SeoMetadataExtractor $seoExtractor,
         private readonly SeoMetadataInjector $seo,
+        private readonly ?TranslatedSitemapStore $sitemap = null,
     ) {
     }
 
@@ -260,6 +262,7 @@ class NewtxtManager
                 '',
                 $this->pageHashVersion(),
             );
+            $this->refreshSitemapSafely();
 
             return;
         }
@@ -544,6 +547,28 @@ class NewtxtManager
     }
 
     /**
+     * Rebuild the local public sitemap from ready translated page snapshots.
+     *
+     * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool}  $options
+     * @return array{xml:string,path:string,count:int,etag:string,lastModified:int}
+     */
+    public function refreshSitemap(?string $siteUrl = null, array $options = []): array
+    {
+        $configuredSiteUrl = trim((string) $this->config->get('newtxt.sitemap_site_url', ''));
+        $siteUrl ??= $configuredSiteUrl !== ''
+            ? $configuredSiteUrl
+            : (string) $this->config->get('app.url');
+        $options['includeQueryStrings'] ??= (bool) $this->config->get(
+            'newtxt.sitemap_include_query_strings',
+            false,
+        );
+
+        $sitemap = $this->sitemap ?? app(TranslatedSitemapStore::class);
+
+        return $sitemap->put($this->renderedPageSitemapEntries($siteUrl, $options));
+    }
+
+    /**
      * Return true when the integration can perform server-side work.
      */
     public function enabled(): bool
@@ -814,11 +839,28 @@ class NewtxtManager
                 'urlMode' => $urlMode,
                 'query' => (string) ($options['query'] ?? ''),
             ]), (bool) $this->config->get('newtxt.store_rendered_html', true));
+            $this->refreshSitemapSafely();
         }
 
         $this->queueRenderedPageTranslationsSync($languageCode, $path, $urlMode, $options);
 
         return $rendered;
+    }
+
+    /**
+     * Keep sitemap generation failures isolated from translated page serving.
+     */
+    private function refreshSitemapSafely(): void
+    {
+        if (!(bool) $this->config->get('newtxt.sitemap_enabled', true)) {
+            return;
+        }
+
+        try {
+            $this->refreshSitemap();
+        } catch (Throwable) {
+            // Sitemap requests retry generation and return a temporary failure if storage is unavailable.
+        }
     }
 
     /**

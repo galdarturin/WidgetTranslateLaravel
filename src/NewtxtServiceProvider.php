@@ -11,15 +11,18 @@ use Newtxt\Laravel\Console\ClearCacheCommand;
 use Newtxt\Laravel\Console\InstallCommand;
 use Newtxt\Laravel\Console\PrewarmCommand;
 use Newtxt\Laravel\Console\PruneStorageCommand;
+use Newtxt\Laravel\Console\RefreshSitemapCommand;
 use Newtxt\Laravel\Console\SyncTranslationsCommand;
 use Newtxt\Laravel\Html\PageHasher;
 use Newtxt\Laravel\Html\SeoMetadataExtractor;
 use Newtxt\Laravel\Html\SeoMetadataInjector;
 use Newtxt\Laravel\Http\Controllers\NewtxtCallbackController;
+use Newtxt\Laravel\Http\Controllers\NewtxtSitemapController;
 use Newtxt\Laravel\Http\Middleware\ServeNewtxtTranslatedPages;
 use Newtxt\Laravel\Security\CallbackSignatureVerifier;
 use Newtxt\Laravel\Storage\HashedTranslationStore;
 use Newtxt\Laravel\Storage\RenderedPageSnapshotStore;
+use Newtxt\Laravel\Storage\TranslatedSitemapStore;
 
 class NewtxtServiceProvider extends ServiceProvider
 {
@@ -66,6 +69,12 @@ class NewtxtServiceProvider extends ServiceProvider
                 $app->make('config'),
             );
         });
+        $this->app->singleton(TranslatedSitemapStore::class, function ($app) {
+            return new TranslatedSitemapStore(
+                $app->make(Filesystem::class),
+                $app->make('config'),
+            );
+        });
 
         $this->app->singleton(NewtxtManager::class, function ($app) {
             return new NewtxtManager(
@@ -77,6 +86,7 @@ class NewtxtServiceProvider extends ServiceProvider
                 $app->make(PageHasher::class),
                 $app->make(SeoMetadataExtractor::class),
                 $app->make(SeoMetadataInjector::class),
+                $app->make(TranslatedSitemapStore::class),
             );
         });
     }
@@ -96,6 +106,7 @@ class NewtxtServiceProvider extends ServiceProvider
 
         $router->aliasMiddleware('newtxt.render', ServeNewtxtTranslatedPages::class);
         $this->registerCallbackRoute($router);
+        $this->registerSitemapRoute($router);
 
         Blade::directive('newtxtWidget', function () {
             return "<?php echo app('" . NewtxtManager::class . "')->widgetSnippet(); ?>";
@@ -106,6 +117,7 @@ class NewtxtServiceProvider extends ServiceProvider
                 InstallCommand::class,
                 PrewarmCommand::class,
                 PruneStorageCommand::class,
+                RefreshSitemapCommand::class,
                 SyncTranslationsCommand::class,
                 ClearCacheCommand::class,
             ]);
@@ -126,6 +138,34 @@ class NewtxtServiceProvider extends ServiceProvider
         $middleware = array_values(array_filter((array) config('newtxt.callback_middleware', [])));
 
         $route = $router->post($path, NewtxtCallbackController::class)->name('newtxt.callback');
+        if ($middleware !== []) {
+            $route->middleware($middleware);
+        }
+    }
+
+    /**
+     * Register the public translated-page sitemap endpoint.
+     */
+    private function registerSitemapRoute(Router $router): void
+    {
+        if (!(bool) config('newtxt.sitemap_enabled', true)) {
+            return;
+        }
+
+        $path = trim((string) config('newtxt.sitemap_path', '/translate-sitemap.xml'));
+        $path = $path === '' ? 'translate-sitemap.xml' : ltrim($path, '/');
+
+        if (
+            !str_ends_with(strtolower($path), '.xml')
+            || str_contains($path, '..')
+            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/', $path) !== 1
+        ) {
+            $path = 'translate-sitemap.xml';
+        }
+
+        $middleware = array_values(array_filter((array) config('newtxt.sitemap_middleware', [])));
+        $route = $router->get($path, NewtxtSitemapController::class)->name('newtxt.sitemap');
+
         if ($middleware !== []) {
             $route->middleware($middleware);
         }

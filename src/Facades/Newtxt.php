@@ -19,6 +19,7 @@ use Newtxt\Laravel\NewtxtManager;
  * @method static string applyIncompleteTranslatedPageSeo(string $languageCode, string $path, string $html, array $options = [])
  * @method static array sitemapEntries(array $sourceEntries, ?string $siteUrl = null, array $options = [])
  * @method static array renderedPageSitemapEntries(?string $siteUrl = null, array $options = [])
+ * @method static array refreshSitemap(?string $siteUrl = null, array $options = [])
  * @method static array accountSettings(bool $forceRefresh = false)
  * @method static array targetLanguages()
  * @method static bool isRenderedPageReady(array $rendered, ?string $languageCode = null)
