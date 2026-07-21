@@ -3,6 +3,7 @@
 namespace Newtxt\Laravel\Tests\Feature;
 
 use Illuminate\Support\Facades\Http;
+use Newtxt\Laravel\Console\PrewarmCommand;
 use Newtxt\Laravel\Tests\TestCase;
 
 class PrewarmCommandTest extends TestCase
@@ -100,5 +101,26 @@ class PrewarmCommandTest extends TestCase
             ->expectsOutput('Skipped fr /about')
             ->expectsOutput('Prewarm completed. Rendered entries: 0. Hashed translations stored: 0.')
             ->assertExitCode(0);
+    }
+
+    public function test_prewarm_reads_every_url_from_namespaced_sitemap_xml(): void
+    {
+        $sitemap = <<<'XML'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                <url><loc>https://example.test/about</loc></url>
+                <url><loc>https://example.test/contacts</loc></url>
+            </urlset>
+            XML;
+
+        Http::fake([
+            'https://1.1.1.1/sitemap.xml' => Http::response($sitemap, 200, ['Content-Type' => 'application/xml']),
+        ]);
+
+        $command = new PrewarmCommand();
+        $method = new \ReflectionMethod($command, 'readSitemapPaths');
+        $paths = $method->invoke($command, 'https://1.1.1.1/sitemap.xml');
+
+        $this->assertSame(['/about', '/contacts'], $paths);
     }
 }

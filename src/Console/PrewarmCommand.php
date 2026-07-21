@@ -143,8 +143,12 @@ class PrewarmCommand extends Command
                 return [];
             }
 
-            return collect($xml->url ?? [])
-                ->map(fn ($entry) => (string) ($entry->loc ?? ''))
+            $sitemapUrls = [];
+            foreach ($xml->url as $entry) {
+                $sitemapUrls[] = (string) ($entry->loc ?? '');
+            }
+
+            return collect($sitemapUrls)
                 ->filter()
                 ->map(fn ($url) => parse_url($url, PHP_URL_PATH) ?: '/')
                 ->map(fn ($path) => $this->normalizePath((string) $path))
