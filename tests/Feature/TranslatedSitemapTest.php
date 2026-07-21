@@ -127,6 +127,72 @@ class TranslatedSitemapTest extends TestCase
         }
     }
 
+    public function test_refresh_preserves_existing_sitemap_urls_when_snapshot_set_is_temporarily_empty(): void
+    {
+        $storagePath = sys_get_temp_dir() . '/newtxt-laravel-preserved-sitemap-' . bin2hex(random_bytes(6));
+        $files = new Filesystem();
+        config()->set('app.url', 'https://example.test');
+        config()->set('newtxt.storage_path', $storagePath);
+        config()->set('newtxt.site_id', 'site-preserved');
+        config()->set('newtxt.source_language', 'en');
+        config()->set('newtxt.target_languages', ['fr']);
+
+        try {
+            $files->ensureDirectoryExists($storagePath . '/sitemaps');
+            $files->put($storagePath . '/sitemaps/translate-sitemap.xml', <<<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://example.test/fr</loc>
+    <lastmod>2026-01-01T00:00:00+00:00</lastmod>
+  </url>
+  <url>
+    <loc>https://example.test/fr/old-ready-page</loc>
+    <lastmod>2026-01-02T00:00:00+00:00</lastmod>
+  </url>
+</urlset>
+XML);
+
+            $sitemap = app(NewtxtManager::class)->refreshSitemap();
+
+            $this->assertSame(2, $sitemap['count']);
+            $this->assertSame(0, $sitemap['generatedCount']);
+            $this->assertSame(2, $sitemap['preservedCount']);
+            $this->assertStringContainsString('<loc>https://example.test/fr</loc>', $sitemap['xml']);
+            $this->assertStringContainsString('<loc>https://example.test/fr/old-ready-page</loc>', $sitemap['xml']);
+
+            app(RenderedPageSnapshotStore::class)->put([
+                'siteId' => 'site-preserved',
+                'languageCode' => 'fr',
+                'path' => '/new-ready-page',
+                'query' => '',
+                'urlMode' => 'path',
+                'pageHash' => 'new-ready-page-hash',
+                'htmlHash' => 'new-ready-html-hash',
+                'pageHashVersion' => 'newtxt-laravel-v4-runtime-rendering',
+                'translationReady' => true,
+                'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour page</main></body></html>',
+            ], true);
+
+            $sitemap = app(NewtxtManager::class)->refreshSitemap();
+
+            $this->assertSame(3, $sitemap['count']);
+            $this->assertSame(1, $sitemap['generatedCount']);
+            $this->assertSame(2, $sitemap['preservedCount']);
+            $this->assertSame(1, substr_count($sitemap['xml'], '<loc>https://example.test/fr/new-ready-page</loc>'));
+            $this->assertStringContainsString('<loc>https://example.test/fr/old-ready-page</loc>', $sitemap['xml']);
+
+            $sitemap = app(NewtxtManager::class)->refreshSitemap(null, ['preserveExisting' => false]);
+
+            $this->assertSame(1, $sitemap['count']);
+            $this->assertSame(1, $sitemap['generatedCount']);
+            $this->assertSame(0, $sitemap['preservedCount']);
+            $this->assertStringNotContainsString('old-ready-page', $sitemap['xml']);
+        } finally {
+            $files->deleteDirectory($storagePath);
+        }
+    }
+
     public function test_refresh_command_preserves_robots_and_does_not_duplicate_directive(): void
     {
         $storagePath = sys_get_temp_dir() . '/newtxt-laravel-command-sitemap-' . bin2hex(random_bytes(6));

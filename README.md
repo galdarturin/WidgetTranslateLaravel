@@ -49,10 +49,10 @@ composer require newtxt/newtxt-translate
 php artisan vendor:publish --tag=newtxt-config
 ```
 
-To target the v1.10 release line explicitly:
+To target the v1.11 release line explicitly:
 
 ```bash
-composer require newtxt/newtxt-translate:^1.10
+composer require newtxt/newtxt-translate:^1.11
 ```
 
 ## Composer Distribution
@@ -221,13 +221,13 @@ The package exposes a dedicated public sitemap on the customer domain:
 https://example.com/translate-sitemap.xml
 ```
 
-The XML is regenerated after a complete translated page snapshot is stored and whenever the public sitemap is requested. The local artifact is written atomically to:
+The XML is regenerated after a complete translated page snapshot is stored and whenever the public sitemap is requested. Refreshes preserve previously written sitemap URLs by default, so a temporary empty snapshot set during deployment or account-settings downtime does not clear already published translated URLs. Set `sitemap_preserve_existing` to `false` only when the application must rebuild the file strictly from currently stored snapshots. The local artifact is written atomically to:
 
 ```text
 storage/app/newtxt/sitemaps/translate-sitemap.xml
 ```
 
-Only absolute URLs backed by complete, current-version translated HTML snapshots are included. The route returns XML with `ETag`, `Last-Modified`, bounded public caching, and `X-Content-Type-Options: nosniff`. Query-string URLs remain excluded unless `sitemap_include_query_strings` is explicitly enabled.
+Only absolute HTTP(S) URLs are written, and new URLs must be backed by complete, current-version translated HTML snapshots. The route returns XML with `ETag`, `Last-Modified`, bounded public caching, and `X-Content-Type-Options: nosniff`. Query-string URLs remain excluded unless `sitemap_include_query_strings` is explicitly enabled.
 
 Declare the sitemap from the root sitemap index or `public/robots.txt` so crawlers can discover it. The command below regenerates the XML and appends one missing `Sitemap:` directive without replacing existing robots directives:
 

@@ -141,6 +141,7 @@ return [
     'sitemap_path' => '/translate-sitemap.xml',
     'sitemap_site_url' => null,
     'sitemap_include_query_strings' => false,
+    'sitemap_preserve_existing' => true,
     'sitemap_max_urls' => 50000,
     'sitemap_max_bytes' => 50000000,
     'sitemap_http_cache_ttl' => 300,

@@ -33,7 +33,8 @@ class RefreshSitemapCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Generated {$sitemap['count']} translated sitemap URLs.");
+        $this->info("Wrote {$sitemap['count']} translated sitemap URLs.");
+        $this->line("Generated from snapshots: {$sitemap['generatedCount']}; preserved from existing XML: {$sitemap['preservedCount']}.");
         $this->line("Local sitemap: {$sitemap['path']}");
 
         $sitemapUrl = $this->publicSitemapUrl();

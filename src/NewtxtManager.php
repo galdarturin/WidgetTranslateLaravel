@@ -550,8 +550,8 @@ class NewtxtManager
     /**
      * Rebuild the local public sitemap from ready translated page snapshots.
      *
-     * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool}  $options
-     * @return array{xml:string,path:string,count:int,etag:string,lastModified:int}
+     * @param  array{siteId?:string,languages?:mixed,urlMode?:string,includeQueryStrings?:bool,preserveExisting?:bool}  $options
+     * @return array{xml:string,path:string,count:int,generatedCount:int,preservedCount:int,etag:string,lastModified:int}
      */
     public function refreshSitemap(?string $siteUrl = null, array $options = []): array
     {
@@ -566,7 +566,7 @@ class NewtxtManager
 
         $sitemap = $this->sitemap ?? app(TranslatedSitemapStore::class);
 
-        return $sitemap->put($this->renderedPageSitemapEntries($siteUrl, $options));
+        return $sitemap->put($this->renderedPageSitemapEntries($siteUrl, $options), $options);
     }
 
     /**
