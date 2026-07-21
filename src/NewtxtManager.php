@@ -20,7 +20,7 @@ use Throwable;
 
 class NewtxtManager
 {
-    private const RENDER_POLICY_VERSION = 'newtxt-laravel-v3';
+    private const RENDER_POLICY_VERSION = 'newtxt-laravel-v4-runtime-rendering';
 
     public function __construct(
         private readonly NewtxtClient $client,
@@ -81,6 +81,7 @@ class NewtxtManager
         $languageCode = $this->normalizeLanguageCode($languageCode);
         $path = $this->normalizePath($path);
         $options = $this->withSourceSeoMetadata($languageCode, $path, $options);
+        $options['requestTimeout'] ??= max(1, (int) $this->config->get('newtxt.request_timeout', 20));
 
         try {
             $rendered = $this->client->renderPage(

@@ -46,6 +46,7 @@ class PrewarmCommand extends Command
                 try {
                     $result = $newtxt->rememberRenderedPage($language, $path, [
                         'forceRefreshCache' => (bool) $this->option('force'),
+                        'requestTimeout' => $this->renderTimeout(),
                         'syncHashedTranslationsOnRender' => false,
                     ]);
                     if (is_array($result) && $newtxt->isRenderedPageReady($result, $language)) {
@@ -87,6 +88,14 @@ class PrewarmCommand extends Command
             ->unique()
             ->values()
             ->all();
+    }
+
+    /**
+     * Use a longer timeout for initial page translation renders.
+     */
+    private function renderTimeout(): int
+    {
+        return max(1, (int) config('newtxt.prewarm_render_timeout', 180));
     }
 
     /**

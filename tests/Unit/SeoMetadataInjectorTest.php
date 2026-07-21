@@ -114,6 +114,45 @@ class SeoMetadataInjectorTest extends TestCase
         $this->assertStringNotContainsString('Source description', $html);
     }
 
+    public function test_it_removes_dom_encoding_marker_after_doctype(): void
+    {
+        $injector = new SeoMetadataInjector();
+
+        $html = $injector->apply(
+            '<!DOCTYPE html><html lang="en"><head><title>Source title</title><meta name="description" content="Source description"></head><body><main><h1>Source title</h1><p>Source description.</p></main></body></html>',
+            [
+                'canonicalUrl' => 'https://example.test/fr',
+                'languageCode' => 'fr',
+                'replaceCanonical' => true,
+            ],
+        );
+
+        $this->assertStringStartsWith('<!DOCTYPE html>', $html);
+        $this->assertStringNotContainsString('<?xml encoding="UTF-8"', $html);
+        $this->assertStringNotContainsString('<!--?xml encoding="UTF-8"', $html);
+    }
+
+    public function test_it_preserves_rendered_body_markup_while_updating_seo_head(): void
+    {
+        $injector = new SeoMetadataInjector();
+        $body = '<body data-theme="dark"><div id="app" class="min-h-screen" data-page="{&quot;component&quot;:&quot;Home&quot;}"><picture><source srcset="/hero.avif 1x, /hero@2x.avif 2x" type="image/avif"><img src="/hero.jpg" class="vehicle-card" style="object-fit: cover" loading="lazy"></picture><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 1h14v14H1z"></path></svg><script type="application/json" data-state>{"html":"<span class=\"keep\">Keep</span>"}</script></div></body>';
+
+        $html = $injector->apply(
+            '<!DOCTYPE html><html lang="en" class="dark" data-cservice-rendered="translated-html"><head><title>Source title</title><meta name="description" content="Source description"><link rel="stylesheet" href="/build/app.css"></head>' . $body . '</html>',
+            [
+                'canonicalUrl' => 'https://example.test/hy',
+                'languageCode' => 'hy',
+                'robots' => 'index,follow',
+                'replaceCanonical' => true,
+            ],
+        );
+
+        $this->assertStringContainsString('<html lang="hy" class="dark" data-cservice-rendered="translated-html">', $html);
+        $this->assertStringContainsString('<link rel="canonical" href="https://example.test/hy">', $html);
+        $this->assertStringContainsString('name="robots" content="index,follow"', $html);
+        $this->assertStringContainsString($body, $html);
+    }
+
     public function test_it_rejects_unsafe_seo_urls(): void
     {
         $injector = new SeoMetadataInjector();

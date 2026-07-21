@@ -154,7 +154,71 @@ class SeoMetadataInjector
             return $html;
         }
 
-        return preg_replace('/^<\?xml encoding="UTF-8"\s*\??>\s*/', '', $result) ?? $result;
+        return $this->mergeRenderedHeadIntoOriginalHtml($html, $result, $languageCode);
+    }
+
+    private function stripDomEncodingMarker(string $html): string
+    {
+        $pattern = '/^(\s*(?:<!DOCTYPE html>\s*)?)(?:<\?xml encoding="UTF-8"\s*\??>|<!--\?xml encoding="UTF-8"\s*\?-->)\s*/i';
+
+        do {
+            $previous = $html;
+            $html = preg_replace($pattern, '$1', $html) ?? $html;
+        } while ($html !== $previous);
+
+        return $html;
+    }
+
+    private function mergeRenderedHeadIntoOriginalHtml(string $originalHtml, string $renderedHtml, ?string $languageCode): string
+    {
+        $originalHtml = $this->stripDomEncodingMarker($originalHtml);
+        $renderedHtml = $this->stripDomEncodingMarker($renderedHtml);
+        $head = $this->headElementHtml($renderedHtml);
+        if ($head === null) {
+            return $renderedHtml;
+        }
+
+        if ($languageCode !== null) {
+            $originalHtml = $this->withHtmlLanguage($originalHtml, $languageCode);
+        }
+
+        if (preg_match('/<head\b[^>]*>.*?<\/head>/is', $originalHtml, $match, PREG_OFFSET_CAPTURE) === 1) {
+            return substr_replace($originalHtml, $head, $match[0][1], strlen($match[0][0]));
+        }
+
+        if (preg_match('/<html\b[^>]*>/i', $originalHtml, $match, PREG_OFFSET_CAPTURE) === 1) {
+            $insertAt = $match[0][1] + strlen($match[0][0]);
+
+            return substr($originalHtml, 0, $insertAt) . $head . substr($originalHtml, $insertAt);
+        }
+
+        return $renderedHtml;
+    }
+
+    private function headElementHtml(string $html): ?string
+    {
+        if (preg_match('/<head\b[^>]*>.*?<\/head>/is', $html, $match) !== 1) {
+            return null;
+        }
+
+        return $match[0];
+    }
+
+    private function withHtmlLanguage(string $html, string $languageCode): string
+    {
+        if (preg_match('/<html\b[^>]*>/i', $html, $match, PREG_OFFSET_CAPTURE) !== 1) {
+            return $html;
+        }
+
+        $tag = $match[0][0];
+        $escaped = htmlspecialchars($languageCode, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        if (preg_match('/\slang\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', $tag) === 1) {
+            $updatedTag = preg_replace('/\slang\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', ' lang="' . $escaped . '"', $tag, 1) ?? $tag;
+        } else {
+            $updatedTag = preg_replace('/>$/', ' lang="' . $escaped . '">', $tag, 1) ?? $tag;
+        }
+
+        return substr_replace($html, $updatedTag, $match[0][1], strlen($tag));
     }
 
     /**

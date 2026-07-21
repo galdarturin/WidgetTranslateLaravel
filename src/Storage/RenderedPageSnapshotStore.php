@@ -269,7 +269,7 @@ class RenderedPageSnapshotStore
         }
 
         $query = (string) ($metadata['query'] ?? '');
-        $version = (string) ($metadata['pageHashVersion'] ?? $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v3'));
+        $version = (string) ($metadata['pageHashVersion'] ?? $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v4-runtime-rendering'));
         $pageHash = trim((string) ($metadata['pageHash'] ?? ''));
         if ($pageHash === '') {
             return;
@@ -460,7 +460,7 @@ class RenderedPageSnapshotStore
      */
     private function indexPath(string $siteId, string $languageCode, string $urlMode, string $path, string $query = '', ?string $version = null): string
     {
-        $version ??= (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v3');
+        $version ??= (string) $this->config->get('newtxt.page_hash_version', 'newtxt-laravel-v4-runtime-rendering');
         $payload = [
             $siteId,
             $languageCode,

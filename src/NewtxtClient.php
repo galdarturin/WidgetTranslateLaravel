@@ -60,6 +60,7 @@ class NewtxtClient
      */
     public function renderPage(string $languageCode, string $path, array $options = []): array
     {
+        $requestTimeout = $this->requestTimeout($options['requestTimeout'] ?? $options['timeout'] ?? null);
         $payload = [
             'languageCode' => $languageCode,
             'path' => $path,
@@ -79,7 +80,7 @@ class NewtxtClient
             $payload['sourceSeoMetadata'] = $sourceSeoMetadata;
         }
 
-        return $this->post('/localization/integrations/laravel/pages/render', $payload);
+        return $this->post('/localization/integrations/laravel/pages/render', $payload, $requestTimeout);
     }
 
     /**
@@ -125,10 +126,10 @@ class NewtxtClient
     /**
      * Send a signed POST request and return an array payload.
      */
-    private function post(string $path, array $payload): array
+    private function post(string $path, array $payload, ?int $timeoutSeconds = null): array
     {
         $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        $response = $this->request($this->signedHeaders('POST', $this->canonicalTarget($path, []), $body))
+        $response = $this->request($this->signedHeaders('POST', $this->canonicalTarget($path, []), $body), $timeoutSeconds)
             ->withBody($body, 'application/json')
             ->send('POST', $this->requestPath($path))
             ->throw()
@@ -187,13 +188,13 @@ class NewtxtClient
     /**
      * Build a preconfigured HTTP request with safe headers.
      */
-    private function request(array $headers = []): PendingRequest
+    private function request(array $headers = [], ?int $timeoutSeconds = null): PendingRequest
     {
         $request = $this->http
             ->baseUrl(self::ApiBaseUrl)
             ->acceptJson()
             ->asJson()
-            ->timeout(20)
+            ->timeout($timeoutSeconds ?? 20)
             ->retry(2, 250, throw: false);
 
         $headers = array_filter([
@@ -206,6 +207,18 @@ class NewtxtClient
         }
 
         return $request;
+    }
+
+    /**
+     * Normalize API request timeouts to bounded positive seconds.
+     */
+    private function requestTimeout(mixed $value): int
+    {
+        if (!is_numeric($value)) {
+            return 20;
+        }
+
+        return max(1, min(600, (int) $value));
     }
 
     /**

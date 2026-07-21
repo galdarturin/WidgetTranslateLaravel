@@ -31,7 +31,7 @@ class TranslatedSitemapTest extends TestCase
                 'urlMode' => 'path',
                 'pageHash' => 'ready-page-hash',
                 'htmlHash' => 'ready-html-hash',
-                'pageHashVersion' => 'newtxt-laravel-v3',
+                'pageHashVersion' => 'newtxt-laravel-v4-runtime-rendering',
                 'translationReady' => true,
                 'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour page</main></body></html>',
             ], true);
@@ -43,7 +43,7 @@ class TranslatedSitemapTest extends TestCase
                 'urlMode' => 'path',
                 'pageHash' => 'draft-page-hash',
                 'htmlHash' => 'draft-html-hash',
-                'pageHashVersion' => 'newtxt-laravel-v3',
+                'pageHashVersion' => 'newtxt-laravel-v4-runtime-rendering',
                 'translationReady' => false,
                 'html' => '<html><head><title>Draft</title></head><body><main>Draft page</main></body></html>',
             ], true);

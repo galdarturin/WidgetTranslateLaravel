@@ -27,6 +27,8 @@ return [
     'public_key' => env('NEWTXT_PUBLIC_KEY', env('NEWTXT_WIDGET_KEY')),
     'api_key' => env('NEWTXT_API_KEY'),
     'private_key' => env('NEWTXT_PRIVATE_KEY'),
+    'request_timeout' => env('NEWTXT_REQUEST_TIMEOUT', 20),
+    'prewarm_render_timeout' => env('NEWTXT_PREWARM_RENDER_TIMEOUT', 180),
 
     /*
     |--------------------------------------------------------------------------
@@ -122,7 +124,7 @@ return [
     'sync_hashed_translations_on_render' => true,
     'sync_hashed_translations_after_response' => true,
     'sync_hashed_translations_on_prewarm' => true,
-    'page_hash_version' => 'newtxt-laravel-v3',
+    'page_hash_version' => 'newtxt-laravel-v4-runtime-rendering',
     'require_translated_render_marker' => true,
 
     /*

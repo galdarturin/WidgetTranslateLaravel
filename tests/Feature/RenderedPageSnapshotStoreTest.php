@@ -22,7 +22,7 @@ class RenderedPageSnapshotStoreTest extends TestCase
                 'query' => '',
                 'urlMode' => 'path',
                 'pageHash' => 'page-hash-one',
-                'pageHashVersion' => 'newtxt-laravel-v3',
+                'pageHashVersion' => 'newtxt-laravel-v4-runtime-rendering',
                 'html' => '<html><head><title>Bonjour</title></head><body><main>Bonjour page</main></body></html>',
             ], true);
 
@@ -30,7 +30,7 @@ class RenderedPageSnapshotStoreTest extends TestCase
             $this->assertFileExists($directory . '/page-hash-one.json');
             $this->assertFileExists($directory . '/page-hash-one.html');
 
-            $store->forget('site-one', 'fr', 'path', '/about', '', 'newtxt-laravel-v3');
+            $store->forget('site-one', 'fr', 'path', '/about', '', 'newtxt-laravel-v4-runtime-rendering');
 
             $this->assertFileDoesNotExist($directory . '/page-hash-one.json');
             $this->assertFileDoesNotExist($directory . '/page-hash-one.html');
